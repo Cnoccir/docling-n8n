@@ -10,3 +10,5 @@ pillow>=10.0.0
 pdf2image>=1.16.0
 python-magic>=0.4.27
 pytesseract>=0.3.10
+langchain-text-splitters>=0.0.1
+spacy>=3.5.0

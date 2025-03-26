@@ -7,6 +7,7 @@ import logging
 import os
 import time
 import uuid
+import io
 from pathlib import Path
 from typing import Dict, List, Any, Optional, BinaryIO
 
@@ -84,8 +85,10 @@ class APIDocumentProcessor:
             with open(temp_file, "wb") as f:
                 f.write(content)
 
-            # Convert using Docling
-            stream = DocumentStream(name=f"{self.pdf_id}.pdf", stream=temp_file)
+            # Read the saved file as bytes and wrap in BytesIO
+            with open(temp_file, "rb") as f:
+                file_bytes = f.read()
+            stream = DocumentStream(name=f"{self.pdf_id}.pdf", stream=io.BytesIO(file_bytes))
             conversion_result = converter.convert(stream)
 
             # Extract document as markdown

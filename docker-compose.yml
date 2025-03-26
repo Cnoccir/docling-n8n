@@ -3,13 +3,14 @@ version: '3.8'
 services:
   docling-api:
     build:
-      context: ./api
-      dockerfile: Dockerfile
+      context: .                        # Build from root context
+      dockerfile: Dockerfile            # Dockerfile is in the root now
     ports:
       - "8000:8000"
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
     volumes:
+      - ./api:/app/api                  # Mount local api folder for live reloading
       - docling_output:/app/output
     restart: unless-stopped
     healthcheck:
@@ -33,6 +34,7 @@ services:
       - WEBHOOK_URL=http://localhost:5678/
       - NODE_ENV=production
       - N8N_CUSTOM_EXTENSIONS=/home/node/.n8n/custom
+      - N8N_RUNNERS_ENABLED=true   # Enable task runners to avoid deprecation warnings
     volumes:
       - n8n_data:/home/node/.n8n
       - ./n8n-node:/home/node/.n8n/custom/n8n-nodes-docling

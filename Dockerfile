@@ -2,6 +2,9 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# Set PYTHONPATH so imports like `from document_processor` work inside /app/api
+ENV PYTHONPATH="/app/api"
+
 # Install system dependencies
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
@@ -13,11 +16,15 @@ RUN apt-get update && \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install dependencies
-COPY requirements.txt .
+COPY api/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Install spaCy model
+RUN python -m spacy download en_core_web_sm
+
+
 # Copy application code
-COPY . .
+COPY ./api /app/api
 
 # Create output directory
 RUN mkdir -p /app/output
