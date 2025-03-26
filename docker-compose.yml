@@ -9,16 +9,8 @@ services:
       - "8000:8000"
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - MONGODB_URI=${MONGODB_URI:-mongodb://mongodb:27017/}
-      - MONGODB_DB_NAME=${MONGODB_DB_NAME:-tech_rag}
-      - QDRANT_HOST=${QDRANT_HOST:-qdrant}
-      - QDRANT_PORT=${QDRANT_PORT:-6333}
-      - OUTPUT_DIR=/app/output
     volumes:
-      - pdf_output:/app/output
-    depends_on:
-      - mongodb
-      - qdrant
+      - docling_output:/app/output
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/"]
@@ -27,24 +19,27 @@ services:
       retries: 3
       start_period: 30s
 
-  mongodb:
-    image: mongo:6.0
+  n8n:
+    image: n8nio/n8n:latest
     ports:
-      - "27017:27017"
+      - "5678:5678"
+    environment:
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - N8N_HOST=localhost
+      - N8N_DIAGNOSTICS_ENABLED=false
+      - GENERIC_TIMEZONE=UTC
+      - N8N_LOG_LEVEL=info
+      - WEBHOOK_URL=http://localhost:5678/
+      - NODE_ENV=production
+      - N8N_CUSTOM_EXTENSIONS=/home/node/.n8n/custom
     volumes:
-      - mongodb_data:/data/db
-    restart: unless-stopped
-
-  qdrant:
-    image: qdrant/qdrant:latest
-    ports:
-      - "6333:6333"
-      - "6334:6334"
-    volumes:
-      - qdrant_data:/qdrant/storage
+      - n8n_data:/home/node/.n8n
+      - ./n8n-node:/home/node/.n8n/custom/n8n-nodes-docling
+    depends_on:
+      - docling-api
     restart: unless-stopped
 
 volumes:
-  pdf_output:
-  mongodb_data:
-  qdrant_data:
+  docling_output:
+  n8n_data:
