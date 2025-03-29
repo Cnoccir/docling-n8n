@@ -46,7 +46,7 @@ export class DoclingExtractor implements INodeType {
                 type: 'string',
                 default: 'http://localhost:8000',
                 required: true,
-                description: 'URL of the Docling extractor API',
+                description: 'Base URL of the Docling extractor API (without /api path)',
             },
             {
                 displayName: 'Document',
@@ -241,20 +241,22 @@ export class DoclingExtractor implements INodeType {
                     endpoint = '/api/extract-supabase-ready';
                 }
 
+                if (apiUrl.endsWith('/') && endpoint.startsWith('/')) {
+                    endpoint = endpoint.substring(1);
+                } else if (!apiUrl.endsWith('/') && !endpoint.startsWith('/')) {
+                    endpoint = '/' + endpoint;
+                }
                 // Make request to API
-                const response = await this.helpers.httpRequestWithAuthentication.call(
-                    this,
-                    'httpBasicAuth',
-                    {
-                        method: 'POST',
-                        url: apiUrl + endpoint,
-                        body: formData,
-                        headers: {
-                            ...formData.getHeaders(),
-                        },
-                        json: true,
+                const response = await this.helpers.httpRequest({
+                    method: 'POST',
+                    url: apiUrl + endpoint,
+                    body: formData,
+                    headers: {
+                        ...formData.getHeaders(),
                     },
-                );
+                    // Remove json: true
+                    returnFullResponse: true
+                });
 
                 returnItems.push({
                     json: response,
