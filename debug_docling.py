@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Debugging script for Docling Extractor components.
-Tests core functionality without the full API layer.
+Enhanced debugging script for Docling Extractor components.
+Tests core functionality and displays sample content from extraction.
 """
 
 import os
@@ -9,6 +9,7 @@ import sys
 import importlib
 import traceback
 import asyncio
+import json
 from pathlib import Path
 
 # Set this environment variable to prevent symlink errors on Windows
@@ -217,6 +218,112 @@ async def test_process_document():
         traceback.print_exc()
         return False
 
+async def display_content_samples(result):
+    """Display sample content of each type to verify extraction quality."""
+    print("\n=== Content Samples ===")
+
+    # 1. Display a text chunk with metadata
+    text_chunks = result.get('text_chunks', [])
+    if text_chunks:
+        print("\n🔍 TEXT CHUNK SAMPLE:")
+        sample_chunk = text_chunks[0]
+        print(f"Content (first 200 chars): {sample_chunk.get('content', '')[:200]}...")
+        print("\nMetadata:")
+        metadata = sample_chunk.get('metadata', {})
+        print(f"  - File ID: {metadata.get('file_id', 'N/A')}")
+        print(f"  - Hierarchy Level: {metadata.get('hierarchy_level', 'N/A')}")
+        print(f"  - Section Headers: {metadata.get('section_headers', [])}")
+        print(f"  - Technical Terms: {metadata.get('technical_terms', [])[:5]}...")
+        print(f"  - Page Numbers: {metadata.get('page_numbers', [])}")
+        print(f"  - Has Code: {metadata.get('has_code', False)}")
+        print(f"  - Has Table: {metadata.get('has_table', False)}")
+        print(f"  - Has Image: {metadata.get('has_image', False)}")
+        print(f"  - Context ID: {metadata.get('context_id', 'N/A')}")
+    else:
+        print("❌ No text chunks found!")
+
+    # 2. Display an image with metadata
+    images = result.get('images', [])
+    if images:
+        print("\n🖼️ IMAGE SAMPLE:")
+        sample_image = images[0]
+        print(f"Image ID: {sample_image.get('image_id', 'N/A')}")
+        print(f"Caption: {sample_image.get('caption', 'N/A')}")
+        print(f"Path: {sample_image.get('path', 'N/A')}")
+        print(f"Page Number: {sample_image.get('page_number', 'N/A')}")
+        print(f"Section Headers: {sample_image.get('section_headers', [])}")
+        print(f"Dimensions: {sample_image.get('width', 'N/A')}x{sample_image.get('height', 'N/A')}")
+        print(f"Technical Terms: {sample_image.get('technical_terms', [])}")
+
+        # Display analysis if available
+        analysis = sample_image.get('analysis', {})
+        if analysis:
+            print("Analysis:")
+            print(f"  - Type: {analysis.get('type', 'unknown')}")
+            print(f"  - Description: {analysis.get('description', 'N/A')}")
+    else:
+        print("❌ No images found!")
+
+    # 3. Display a table with metadata
+    tables = result.get('tables', [])
+    if tables:
+        print("\n📊 TABLE SAMPLE:")
+        sample_table = tables[0]
+        print(f"Table ID: {sample_table.get('table_id', 'N/A')}")
+        print(f"Caption: {sample_table.get('caption', 'N/A')}")
+        print(f"Page Number: {sample_table.get('page_number', 'N/A')}")
+        print(f"Section Headers: {sample_table.get('section_headers', [])}")
+
+        # Display headers and a sample row
+        headers = sample_table.get('headers', [])
+        data = sample_table.get('data', [])
+        if headers:
+            print(f"Headers: {headers}")
+        if data and len(data) > 0:
+            print(f"Sample Row: {data[0]}")
+
+        print(f"CSV Path: {sample_table.get('csv_path', 'N/A')}")
+        print(f"Context ID: {sample_table.get('context_id', 'N/A')}")
+    else:
+        print("❌ No tables found!")
+
+    # 4. Display a procedure
+    procedures = result.get('procedures', [])
+    if procedures:
+        print("\n📝 PROCEDURE SAMPLE:")
+        sample_proc = procedures[0]
+        print(f"Procedure ID: {sample_proc.get('procedure_id', 'N/A')}")
+        print(f"Title: {sample_proc.get('title', 'N/A')}")
+
+        # Display content or steps
+        if 'content' in sample_proc:
+            print(f"Content (first 200 chars): {sample_proc.get('content', '')[:200]}...")
+
+        steps = sample_proc.get('steps', [])
+        if steps:
+            print(f"Steps: {len(steps)} steps")
+            if len(steps) > 0:
+                print(f"First Step: {steps[0].get('content', '')[:100]}...")
+    else:
+        print("❌ No procedures found!")
+
+    print("\nSummary of Content Types:")
+    print(f"- Text Chunks: {len(text_chunks)}")
+    print(f"- Images: {len(images)}")
+    print(f"- Tables: {len(tables)}")
+    print(f"- Procedures: {len(procedures)}")
+
+    # Display document metadata
+    doc_meta = result.get('document_metadata', {})
+    if doc_meta:
+        print("\n📄 DOCUMENT METADATA:")
+        print(f"Domain Category: {result.get('domain_category', 'N/A')}")
+        print(f"Page Count: {doc_meta.get('page_count', 'N/A')}")
+        print(f"Primary Technical Terms: {doc_meta.get('primary_technical_terms', [])[:10]}...")
+        print(f"Content Types: {doc_meta.get('content_types', [])}")
+
+    print("\n✅ Sample content verification complete!")
+
 async def test_multimodal_extraction():
     """Test the multi-modal extraction pipeline with Supabase preparation."""
     print("\n=== Testing Multi-Modal Extraction Pipeline ===")
@@ -301,6 +408,26 @@ async def test_multimodal_extraction():
         if tables:
             context_id = tables[0].get('context_id', 'MISSING')
             print(f"✓ Table context_id: {context_id}")
+
+        # NEW: Display content samples
+        await display_content_samples(result)
+
+        # Save sample of result to a JSON file for inspection
+        try:
+            sample_result = {
+                "file_id": result.get('file_id', ''),
+                "text_chunks": text_chunks[:2] if text_chunks else [],
+                "images": images[:1] if images else [],
+                "tables": tables[:1] if tables else [],
+                "procedures": procedures[:1] if procedures else [],
+                "document_metadata": result.get('document_metadata', {})
+            }
+
+            with open('extraction_sample.json', 'w', encoding='utf-8') as f:
+                json.dump(sample_result, f, indent=2, ensure_ascii=False)
+            print("\n✅ Sample result saved to extraction_sample.json")
+        except Exception as e:
+            print(f"\n⚠️ Failed to save sample result: {e}")
 
         print("\n✅ Multi-modal extraction test completed successfully!")
         return True

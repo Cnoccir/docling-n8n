@@ -150,7 +150,9 @@ class ChunkMetadata:
         technical_terms: List[str] = None,
         embedding_type: str = None,
         element_ids: List[str] = None,
-        token_count: int = 0
+        token_count: int = 0,
+        hierarchy_level: int = 0,  # Added hierarchy_level
+        content_types: List[str] = None  # Added content_types
     ):
         self.pdf_id = pdf_id
         self.content_type = content_type
@@ -163,6 +165,8 @@ class ChunkMetadata:
         self.embedding_type = embedding_type or EmbeddingType.GENERAL
         self.element_ids = element_ids or []
         self.token_count = token_count
+        self.hierarchy_level = hierarchy_level  # New property
+        self.content_types = content_types or []  # New property
 
     def dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -177,7 +181,9 @@ class ChunkMetadata:
             "technical_terms": self.technical_terms,
             "embedding_type": self.embedding_type,
             "element_ids": self.element_ids,
-            "token_count": self.token_count
+            "token_count": self.token_count,
+            "hierarchy_level": self.hierarchy_level,  # Added to dict
+            "content_types": self.content_types  # Added to dict
         }
 
 class DocumentChunk:
@@ -191,6 +197,28 @@ class DocumentChunk:
         self.chunk_id = chunk_id
         self.content = content
         self.metadata = metadata
+
+        # Auto-detect content types if not provided
+        if not self.metadata.content_types:
+            self.metadata.content_types = self._detect_content_types(content)
+
+    def _detect_content_types(self, content: str) -> List[str]:
+        """Detect content types in the chunk content."""
+        types = ["text"]
+
+        # Check for code blocks
+        if "```" in content or "`" in content:
+            types.append("code")
+
+        # Check for tables
+        if "|" in content and "-+-" in content.replace(" ", "") or "| --- |" in content:
+            types.append("table")
+
+        # Check for images
+        if "![" in content or "<!-- image -->" in content:
+            types.append("image")
+
+        return types
 
     def dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -1068,7 +1096,7 @@ class DocumentProcessor:
         section_headers: List[str] = None,
         hierarchy_level: int = 0
     ) -> Optional[ContentElement]:
-        """Process a table item with optimized data extraction."""
+        """Process a table item with optimized data extraction and Unicode handling."""
         try:
             if not hasattr(item, "data") or not item.data:
                 return None
@@ -1108,9 +1136,10 @@ class DocumentProcessor:
             except Exception as e:
                 logger.warning(f"Caption extraction failed: {e}")
 
-            # Try to get markdown
+            # Try to get markdown - IMPORTANT: Pass the doc argument
             try:
-                markdown = item.export_to_markdown()
+                # Use doc argument to avoid deprecation warning
+                markdown = item.export_to_markdown(doc)
             except Exception as md_error:
                 logger.warning(f"Markdown export failed: {md_error}")
                 # Manual fallback
@@ -1122,10 +1151,30 @@ class DocumentProcessor:
                         md_lines.append("| " + " | ".join(str(cell) for cell in row) + " |")
                 markdown = "\n".join(md_lines)
 
-            # Page number
+            # Get page number
             page_number = 0
             if item.prov and hasattr(item.prov[0], "page_no"):
                 page_number = item.prov[0].page_no
+
+            # Create a CSV file for this table
+            csv_path = None
+            if headers and rows:
+                try:
+                    # Create tables directory if it doesn't exist
+                    tables_dir = self.output_dir / "assets" / "tables"
+                    tables_dir.mkdir(parents=True, exist_ok=True)
+
+                    # Create a unique ID for this table
+                    table_id = f"tbl_{self.pdf_id}_{uuid.uuid4().hex[:8]}"
+                    csv_filename = f"{table_id}.csv"
+                    csv_path = tables_dir / csv_filename
+
+                    # Write CSV with proper Unicode handling
+                    self._write_csv_with_unicode_handling(csv_path, headers, rows)
+
+                except Exception as csv_error:
+                    logger.warning(f"Failed to create CSV file: {csv_error}")
+                    csv_path = None
 
             row_count = len(rows)
             col_count = len(headers) if headers else (len(rows[0]) if rows else 0)
@@ -1142,7 +1191,12 @@ class DocumentProcessor:
                     text_parts.extend(str(cell) for cell in rows[0] if cell)
                 technical_terms = extract_technical_terms(" ".join(text_parts))
 
-            # Create table data object
+            element_id = f"tbl_{self.pdf_id}_{uuid.uuid4().hex[:8]}"
+
+            # Create a context ID for relationships
+            context_id = f"tbl_ctx_{self.pdf_id}_{element_id[-8:]}"
+
+            # Create table data object - INCLUDE CONTEXT_ID HERE INSTEAD
             table_data = {
                 "headers": headers,
                 "rows": rows[:10],  # Only store the first 10 rows to avoid excessive metadata
@@ -1151,15 +1205,15 @@ class DocumentProcessor:
                 "summary": summary,
                 "row_count": row_count,
                 "column_count": col_count,
-                "technical_concepts": technical_terms
+                "technical_concepts": technical_terms,
+                "csv_path": str(csv_path) if csv_path else None,
+                "context_id": context_id  # Store context_id here instead of passing to ContentMetadata
             }
 
             # Determine embedding type for tables
             embedding_type = EmbeddingType.TECHNICAL
             if any(term.lower() in caption.lower() for term in ["procedure", "process", "step", "task"]):
                 embedding_type = EmbeddingType.TASK
-
-            element_id = f"tbl_{self.pdf_id}_{uuid.uuid4().hex[:8]}"
 
             metadata = ContentMetadata(
                 pdf_id=self.pdf_id,
@@ -1173,6 +1227,7 @@ class DocumentProcessor:
                 chunk_level=ChunkLevel.SECTION,  # Tables are typically section-level
                 embedding_type=embedding_type,
                 docling_ref=getattr(item, "self_ref", None)
+                # Do NOT include context_id here
             )
 
             return ContentElement(
@@ -1186,6 +1241,54 @@ class DocumentProcessor:
         except Exception as e:
             logger.warning(f"Failed to process table item: {e}")
             return None
+
+    def _write_csv_with_unicode_handling(self, csv_path, headers, rows):
+        """Write CSV file with proper Unicode handling."""
+        import csv
+
+        # Use UTF-8 encoding and newline='' for cross-platform compatibility
+        with open(csv_path, 'w', newline='', encoding='utf-8') as csvfile:
+            writer = csv.writer(csvfile)
+
+            # Clean headers to handle problematic Unicode characters
+            cleaned_headers = [self._clean_for_csv(h) for h in headers]
+            writer.writerow(cleaned_headers)
+
+            # Clean data rows and write to CSV
+            for row in rows:
+                # Handle None values and convert all cells to strings with Unicode cleaning
+                cleaned_row = [self._clean_for_csv(cell) for cell in row]
+                writer.writerow(cleaned_row)
+
+    def _clean_for_csv(self, value):
+        """Clean a value for CSV export, handling Unicode characters."""
+        if value is None:
+            return ""
+
+        # Convert to string
+        str_value = str(value)
+
+        # Replace problematic Unicode characters
+        replacements = {
+            '\u2192': '->',  # Right arrow →
+            '\u2190': '<-',  # Left arrow ←
+            '\u2191': '^',   # Up arrow ↑
+            '\u2193': 'v',   # Down arrow ↓
+            '\u2022': '*',   # Bullet •
+            '\u2713': 'X',   # Checkmark ✓
+            '\u2014': '--',  # Em dash —
+            '\u2018': "'",   # Left single quote '
+            '\u2019': "'",   # Right single quote '
+            '\u201c': '"',   # Left double quote "
+            '\u201d': '"',   # Right double quote "
+            '\u00A0': ' ',   # Non-breaking space
+            '\u2026': '...'  # Ellipsis …
+        }
+
+        for char, replacement in replacements.items():
+            str_value = str_value.replace(char, replacement)
+
+        return str_value
 
     def _process_picture_item(
         self,
@@ -1211,6 +1314,7 @@ class DocumentProcessor:
 
             image_id = f"img_{self.pdf_id}_{uuid.uuid4().hex[:8]}"
 
+            # Create images directory if it doesn't exist
             images_dir = self.output_dir / "assets" / "images"
             images_dir.mkdir(parents=True, exist_ok=True)
             image_path = images_dir / f"{image_id}.png"
@@ -1221,28 +1325,33 @@ class DocumentProcessor:
                 logger.warning(f"Failed to save image: {save_error}")
                 return None
 
+            # Try to get caption using doc parameter
             caption = "Image"
             try:
                 if hasattr(item, "caption_text") and callable(getattr(item, "caption_text")):
-                    maybe_cap = item.caption_text(doc)
+                    maybe_cap = item.caption_text(doc)  # Pass doc to avoid warnings
                     if maybe_cap:
                         caption = maybe_cap
             except Exception as caption_error:
                 logger.warning(f"Caption extraction failed: {caption_error}")
 
+            # Get page number
             page_number = 0
             if item.prov and hasattr(item.prov[0], "page_no"):
                 page_number = item.prov[0].page_no
 
-            # Extract context
+            # Extract surrounding context
             context = self._extract_surrounding_context(item, doc)
 
-            # Generate markdown content
-            rel_path = str(image_path.relative_to(self.output_dir)) if str(image_path).startswith(str(self.output_dir)) else str(image_path)
+            # Generate markdown with proper asset path reference
+            # Use a relative path that will work with the API's static file serving
+            rel_path = f"/output/{self.pdf_id}/assets/images/{image_id}.png"
             md_content = f"![{caption}]({rel_path})"
 
             # Extract technical terms from caption and context
-            technical_terms = extract_technical_terms(caption + " " + (context or ""))
+            technical_terms = []
+            if self.config.extract_technical_terms:
+                technical_terms = extract_technical_terms(caption + " " + (context or ""))
 
             # Create image features
             image_features = {
@@ -1252,13 +1361,21 @@ class DocumentProcessor:
                 "is_grayscale": pil_image.mode in ("L", "LA")
             }
 
-            # Detect objects in image
-            detected_objects = self._detect_objects_in_image(pil_image, caption)
+            # Basic image content analysis
+            image_type = "unknown"
+            if caption:
+                caption_lower = caption.lower()
+                if any(term in caption_lower for term in ["diagram", "schematic", "flow", "architecture"]):
+                    image_type = "diagram"
+                elif any(term in caption_lower for term in ["chart", "graph", "plot", "figure"]):
+                    image_type = "chart"
+                elif any(term in caption_lower for term in ["screenshot", "ui", "interface", "window"]):
+                    image_type = "screenshot"
 
             # Create image analysis
             image_analysis = {
                 "description": caption,
-                "detected_objects": detected_objects,
+                "type": image_type,
                 "technical_details": {"width": pil_image.width, "height": pil_image.height},
                 "technical_concepts": technical_terms
             }
@@ -1266,6 +1383,7 @@ class DocumentProcessor:
             # Create image paths
             image_paths = {
                 "original": str(image_path),
+                "api_path": rel_path,
                 "format": "PNG",
                 "size": os.path.getsize(image_path) if os.path.exists(image_path) else 0
             }

@@ -1,0 +1,8 @@
+Property,Value,Description
+Timestamp,read-only,Reports when the event occurred.
+Operation,read-only,Identifies the type of event.
+Target,read-only,Reports the modified Ord.
+Slot Name,read-only,Identifies the host IP address.
+Old Value,read-only,Reports the value before the change.
+Value,read-only,Reports the new value.
+User Name,read-only,Identifies the person who made the change.
