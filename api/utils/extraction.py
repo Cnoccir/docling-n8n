@@ -505,7 +505,6 @@ def extract_hierarchy_relationships(
     ]
 
     hierarchical_relationships = []
-    terms_set = set(technical_terms)
 
     for term1 in technical_terms:
         for term2 in technical_terms:
@@ -513,26 +512,21 @@ def extract_hierarchy_relationships(
                 continue
 
             for pattern_template, confidence, rel_type in hierarchy_patterns:
-                # Try both directions for each term pair
-                pattern1 = pattern_template.replace("{parent}", re.escape(term1)).replace("{child}", re.escape(term2))
-                pattern1 = pattern_template.replace("{interface}", re.escape(term1)).replace("{implementer}", re.escape(term2))
-                pattern1 = pattern_template.replace("{dependency}", re.escape(term1)).replace("{dependent}", re.escape(term2))
+                # Check which placeholders are present and do the correct replacements
+                if "{parent}" in pattern_template and "{child}" in pattern_template:
+                    pattern1 = pattern_template.replace("{child}", re.escape(term1)).replace("{parent}", re.escape(term2))
+                    pattern2 = pattern_template.replace("{child}", re.escape(term2)).replace("{parent}", re.escape(term1))
+                elif "{implementer}" in pattern_template and "{interface}" in pattern_template:
+                    pattern1 = pattern_template.replace("{implementer}", re.escape(term1)).replace("{interface}", re.escape(term2))
+                    pattern2 = pattern_template.replace("{implementer}", re.escape(term2)).replace("{interface}", re.escape(term1))
+                elif "{dependent}" in pattern_template and "{dependency}" in pattern_template:
+                    pattern1 = pattern_template.replace("{dependent}", re.escape(term1)).replace("{dependency}", re.escape(term2))
+                    pattern2 = pattern_template.replace("{dependent}", re.escape(term2)).replace("{dependency}", re.escape(term1))
+                else:
+                    continue  # Skip any pattern that doesn't match expected placeholders
 
-                pattern2 = pattern_template.replace("{parent}", re.escape(term2)).replace("{child}", re.escape(term1))
-                pattern2 = pattern_template.replace("{interface}", re.escape(term2)).replace("{implementer}", re.escape(term1))
-                pattern2 = pattern_template.replace("{dependency}", re.escape(term2)).replace("{dependent}", re.escape(term1))
-
-                # Check first direction
+                # For the first direction, assume term1 corresponds to the first placeholder
                 if re.search(pattern1, text, re.IGNORECASE):
-                    hierarchical_relationships.append({
-                        "source": term2,
-                        "target": term1,
-                        "type": rel_type,
-                        "confidence": confidence
-                    })
-
-                # Check second direction
-                if re.search(pattern2, text, re.IGNORECASE):
                     hierarchical_relationships.append({
                         "source": term1,
                         "target": term2,
@@ -540,7 +534,15 @@ def extract_hierarchy_relationships(
                         "confidence": confidence
                     })
 
-    # Filter by confidence threshold
+                # For the reversed direction, assume term2 corresponds to the first placeholder
+                if re.search(pattern2, text, re.IGNORECASE):
+                    hierarchical_relationships.append({
+                        "source": term2,
+                        "target": term1,
+                        "type": rel_type,
+                        "confidence": confidence
+                    })
+
     return [rel for rel in hierarchical_relationships if rel["confidence"] >= min_confidence]
 
 def extract_procedures_and_parameters(text: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:

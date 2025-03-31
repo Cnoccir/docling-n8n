@@ -11,9 +11,40 @@ import traceback
 import asyncio
 from pathlib import Path
 
+# Set this environment variable to prevent symlink errors on Windows
+os.environ['HF_HUB_DISABLE_SYMLINKS_WARNING'] = '1'
+# Also disable symlinks completely
+os.environ['HF_HUB_DISABLE_SYMLINKS'] = '1'
+
+# Determine if we're running in Docker by checking environment
+IN_DOCKER = os.environ.get('PYTHONPATH', '').endswith('/app/api')
+
+# Set up paths for both environments
+if IN_DOCKER:
+    # In Docker, PYTHONPATH is already set correctly
+    DOC_PROCESSOR_PREFIX = "document_processor"
+    UTILS_PREFIX = "utils"
+else:
+    # In local development, we need to simulate the Docker environment
+    # by making 'api' directory accessible as if it were the root
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    api_dir = os.path.join(script_dir, "api")
+
+    # Insert api directory at the beginning of sys.path
+    # This makes modules in api/ accessible as top-level modules
+    sys.path.insert(0, api_dir)
+
+    # Now use the Docker-style prefixes
+    DOC_PROCESSOR_PREFIX = "document_processor"
+    UTILS_PREFIX = "utils"
+
 async def test_imports():
     """Test all the critical imports to identify dependency issues."""
     print("\n=== Testing Module Imports ===")
+    print(f"Environment: {'Docker' if IN_DOCKER else 'Local Development'}")
+    print(f"Python path includes: {sys.path[0]}")
+    print(f"Document processor prefix: {DOC_PROCESSOR_PREFIX}")
+    print(f"Utils prefix: {UTILS_PREFIX}")
 
     modules_to_test = [
         # Core Python modules
@@ -25,12 +56,12 @@ async def test_imports():
         "docling.document_converter",
         "langchain_text_splitters",
 
-        # Our package modules
-        "api.utils.tokenization",
-        "api.utils.extraction",
-        "api.utils.processing",
-        "api.document_processor.core",
-        "api.document_processor.adapter"
+        # Our package modules with dynamic prefixes
+        f"{UTILS_PREFIX}.tokenization",
+        f"{UTILS_PREFIX}.extraction",
+        f"{UTILS_PREFIX}.processing",
+        f"{DOC_PROCESSOR_PREFIX}.core",
+        f"{DOC_PROCESSOR_PREFIX}.adapter"
     ]
 
     success_count = 0
@@ -59,10 +90,15 @@ async def test_core_functions():
     print("\n=== Testing Core Functions ===")
 
     try:
-        # Import our modules only after we've checked they can be imported
-        from api.utils.tokenization import get_tokenizer
-        from api.utils.extraction import extract_technical_terms
-        from api.document_processor.core import ProcessingConfig, DocumentProcessor
+        # Import our modules using the correct prefixes
+        tokenization_module = importlib.import_module(f"{UTILS_PREFIX}.tokenization")
+        extraction_module = importlib.import_module(f"{UTILS_PREFIX}.extraction")
+        core_module = importlib.import_module(f"{DOC_PROCESSOR_PREFIX}.core")
+
+        get_tokenizer = getattr(tokenization_module, "get_tokenizer")
+        extract_technical_terms = getattr(extraction_module, "extract_technical_terms")
+        ProcessingConfig = getattr(core_module, "ProcessingConfig")
+        DocumentProcessor = getattr(core_module, "DocumentProcessor")
 
         # Test the tokenizer
         print("Testing tokenizer...")
@@ -105,12 +141,15 @@ async def check_syntax():
     """Check for syntax errors in key files."""
     print("\n=== Checking for Syntax Errors ===")
 
+    # Use different paths depending on environment
+    path_prefix = "" if IN_DOCKER else "api/"
+
     files_to_check = [
-        "api/document_processor/core.py",
-        "api/document_processor/adapter.py",
-        "api/utils/processing.py",
-        "api/utils/extraction.py",
-        "api/utils/tokenization.py"
+        f"{path_prefix}document_processor/core.py",
+        f"{path_prefix}document_processor/adapter.py",
+        f"{path_prefix}utils/processing.py",
+        f"{path_prefix}utils/extraction.py",
+        f"{path_prefix}utils/tokenization.py"
     ]
 
     error_count = 0
@@ -144,7 +183,8 @@ async def test_process_document():
             return True
 
         # Import the document processing function
-        from api.document_processor.core import process_technical_document
+        core_module = importlib.import_module(f"{DOC_PROCESSOR_PREFIX}.core")
+        process_technical_document = getattr(core_module, "process_technical_document")
 
         print(f"Testing processing with {sample_path}...")
 
@@ -167,9 +207,9 @@ async def test_process_document():
         )
 
         print(f"✅ Document processing completed successfully!")
-        print(f"  - Generated {len(result.get('chunks', []))} chunks")
-        print(f"  - Extracted {len(result.get('technical_terms', []))} technical terms")
-        print(f"  - Generated markdown content with {len(result.get('markdown_content', ''))} characters")
+        print(f"  - Generated {len(result.chunks if hasattr(result, 'chunks') else [])} chunks")
+        print(f"  - Extracted {len(result.concept_network.primary_concepts if hasattr(result, 'concept_network') and result.concept_network else [])}")
+        print(f"  - Generated markdown content with {len(result.markdown_content if hasattr(result, 'markdown_content') else '')}")
 
         return True
     except Exception as e:
@@ -177,12 +217,107 @@ async def test_process_document():
         traceback.print_exc()
         return False
 
+async def test_multimodal_extraction():
+    """Test the multi-modal extraction pipeline with Supabase preparation."""
+    print("\n=== Testing Multi-Modal Extraction Pipeline ===")
+
+    try:
+        # Find a sample PDF or create a simple one
+        sample_path = "sample.pdf"
+        if not os.path.exists(sample_path):
+            print("ℹ️ No sample.pdf found. Creating simple test PDF...")
+            # Create a simple PDF for testing
+            try:
+                from reportlab.pdfgen import canvas
+                c = canvas.Canvas("sample.pdf")
+                c.drawString(100, 750, "Test Document")
+                c.drawString(100, 700, "This is a test document with some technical terms.")
+                c.drawString(100, 650, "API, module, function, database")
+                c.save()
+                print("✓ Created simple test PDF")
+            except ImportError:
+                print("❌ Could not create test PDF (reportlab not installed)")
+                return True
+
+        # Import the processor with the correct prefix
+        adapter_module = importlib.import_module(f"{DOC_PROCESSOR_PREFIX}.adapter")
+        APIDocumentProcessor = getattr(adapter_module, "APIDocumentProcessor")
+
+        # Read the sample file
+        with open(sample_path, "rb") as f:
+            content = f.read()
+
+        print("Creating processor...")
+        processor = APIDocumentProcessor(
+            pdf_id="test_multimodal",
+            config={
+                "extract_technical_terms": True,
+                "extract_procedures": True,
+                "extract_relationships": True,
+                "process_images": True,
+                "process_tables": True,
+                "chunk_size": 500,
+                "chunk_overlap": 100
+            }
+        )
+
+        print("Processing document...")
+        result = await processor.process_document(content)
+
+        # Verify structure
+        print("\nVerifying result structure:")
+        print(f"✓ file_id: {result.get('file_id', 'MISSING')}")
+
+        # Check if we have actual content
+        text_chunks = result.get('text_chunks', [])
+        print(f"✓ text_chunks: {len(text_chunks)} items")
+        if len(text_chunks) == 0:
+            print("⚠️ Warning: No text chunks extracted")
+
+        images = result.get('images', [])
+        print(f"✓ images: {len(images)} items")
+
+        tables = result.get('tables', [])
+        print(f"✓ tables: {len(tables)} items")
+
+        procedures = result.get('procedures', [])
+        print(f"✓ procedures: {len(procedures)} items")
+
+        print(f"✓ domain_category: {result.get('domain_category', 'MISSING')}")
+
+        # Fail the test if no content was extracted
+        if len(text_chunks) == 0:
+            print("❌ Test considered failed: No text content extracted")
+            return False
+
+        # Check context IDs for relationships
+        print("\nChecking context IDs for relationships:")
+        if text_chunks:
+            context_id = text_chunks[0]['metadata'].get('context_id', 'MISSING')
+            print(f"✓ Text chunk context_id: {context_id}")
+        if images:
+            context_id = images[0].get('context_id', 'MISSING')
+            print(f"✓ Image context_id: {context_id}")
+        if tables:
+            context_id = tables[0].get('context_id', 'MISSING')
+            print(f"✓ Table context_id: {context_id}")
+
+        print("\n✅ Multi-modal extraction test completed successfully!")
+        return True
+    except Exception as e:
+        print(f"❌ Multi-modal extraction test failed: {str(e)}")
+        traceback.print_exc()
+        return False
+
 async def find_core_py_issue():
     """Specifically look for the issue in core.py around line 1941."""
     print("\n=== Finding Issue in core.py ===")
 
+    # Use different path depending on environment
+    path_prefix = "" if IN_DOCKER else "api/"
+    core_path = f"{path_prefix}document_processor/core.py"
+
     try:
-        core_path = "api/document_processor/core.py"
         if not os.path.exists(core_path):
             print(f"❌ File not found: {core_path}")
             return False
@@ -289,10 +424,7 @@ async def main():
 
     print("=== Docling Extractor Debugging Script ===")
     print(f"Current directory: {os.getcwd()}")
-
-    # Check Python version
-    py_version = sys.version.split()[0]
-    print(f"Python version: {py_version}")
+    print(f"Running in: {'Docker container' if IN_DOCKER else 'Local environment with Docker-like imports'}")
 
     # Add the current directory to the Python path
     sys.path.insert(0, os.getcwd())
@@ -318,19 +450,32 @@ async def main():
 
     # If everything is ok so far, test document processing
     if imports_ok and syntax_ok and core_ok:
-        await test_process_document()
+        doc_ok = await test_process_document()
+        # Now also test multi-modal extraction
+        multimodal_ok = await test_multimodal_extraction()
     else:
-        print("\n⚠️ Skipping document processing test due to previous errors.")
+        doc_ok = False
+        multimodal_ok = False
+        print("\n⚠️ Skipping document processing and multi-modal tests due to previous errors.")
 
     print("\n=== Debug Summary ===")
     print(f"Syntax check: {'✅ Passed' if syntax_ok else '❌ Failed'}")
     print(f"Import check: {'✅ Passed' if imports_ok else '❌ Failed'}")
     print(f"Core functions: {'✅ Passed' if core_ok else '❌ Failed' if imports_ok and syntax_ok else '⚠️ Not tested'}")
+    print(f"Document processing: {'✅ Passed' if doc_ok else '❌ Failed' if core_ok else '⚠️ Not tested'}")
+    print(f"Multi-modal extraction: {'✅ Passed' if multimodal_ok else '❌ Failed' if core_ok else '⚠️ Not tested'}")
 
-    if not imports_ok or not syntax_ok or not core_ok:
-        print("\n⚠️ Fix the issues above before running the Docker container.")
+    # Update at the end of the main function
+    if not imports_ok or not syntax_ok:
+        print("\n⚠️ Critical issues detected. Fix import and syntax errors first.")
+    elif not core_ok:
+        print("\n⚠️ Core function issues detected. Fix core.py and related modules.")
+    elif not doc_ok:
+        print("\n⚠️ Document processing issues detected. This might be fixable in Docker environment.")
+    elif not multimodal_ok:
+        print("\n⚠️ Multi-modal extraction issues detected. Check adapter.py implementation.")
     else:
-        print("\n✅ Basic tests passed. You can try running the Docker container now.")
+        print("\n✅ All tests passed. Your Docling Extractor is ready for use!")
 
 if __name__ == "__main__":
     asyncio.run(main())

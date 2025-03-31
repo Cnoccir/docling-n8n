@@ -105,6 +105,8 @@ async def extract_supabase_ready(
     extract_technical_terms: bool = Form(True),
     extract_procedures: bool = Form(True),
     extract_relationships: bool = Form(True),
+    process_images: bool = Form(True),
+    process_tables: bool = Form(True),
     chunk_size: int = Form(500),
     chunk_overlap: int = Form(100),
 ):
@@ -125,63 +127,47 @@ async def extract_supabase_ready(
             "extract_technical_terms": extract_technical_terms,
             "extract_procedures": extract_procedures,
             "extract_relationships": extract_relationships,
+            "process_images": process_images,
+            "process_tables": process_tables,
             "chunk_size": chunk_size,
             "chunk_overlap": chunk_overlap,
         }
 
-        # Create processor
+        # Create processor with enhanced capabilities
         processor = APIDocumentProcessor(
             pdf_id=doc_id,
             config=config
         )
 
-        # Process document
+        # Process document with comprehensive extraction
         result = await processor.process_document(content)
 
-        # Format for Supabase insertion
+        # Format documents for Supabase chunks table
         supabase_docs = []
-        for chunk in result.get("chunks", []):
-            # Format the metadata properly for Supabase
+        for chunk in result.get("text_chunks", []):
             supabase_docs.append({
                 "content": chunk.get("content", ""),
-                "metadata": {
-                    "file_id": doc_id,
-                    "file_title": doc_title,
-                    "page_numbers": chunk.get("page_numbers", []),
-                    "technical_terms": chunk.get("technical_terms", []),
-                    "chunk_level": chunk.get("chunk_level", "section"),
-                    "section_headers": chunk.get("section_headers", []),
-                }
+                "metadata": chunk.get("metadata", {})
             })
 
-        # Format procedures for DB storage
-        procedures_data = []
-        for proc in result.get("procedures", []):
-            procedures_data.append({
-                "procedure_id": proc.get("procedure_id", f"proc_{doc_id}_{uuid.uuid4().hex[:8]}"),
-                "dataset_id": doc_id,
-                "title": proc.get("title", "Untitled Procedure"),
-                "content": proc.get("content", ""),
-                "steps": proc.get("steps", []),
-                "parameters": proc.get("parameters", [])
-            })
-
-        # Return Supabase-ready format
+        # Return comprehensive Supabase-ready format
         return {
             "pdf_id": doc_id,
             "file_title": doc_title,
             "document_count": len(supabase_docs),
             "documents": supabase_docs,
-            "procedures": procedures_data,
-            "parameters": result.get("parameters", []),
+            "procedures": result.get("procedures", []),
+            "images": result.get("images", []),
+            "tables": result.get("tables", []),
             "technical_terms": result.get("technical_terms", []),
-            "domain_category": result.get("domain_category", "general")
+            "domain_category": result.get("domain_category", "general"),
+            "document_metadata": result.get("document_metadata", {})
         }
 
     except Exception as e:
         logger.error(f"Error processing document for Supabase: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error processing document: {str(e)}")
-
+        
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)

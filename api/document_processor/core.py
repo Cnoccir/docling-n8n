@@ -536,14 +536,17 @@ class DocumentProcessor:
             )
 
             # 12. Save results to disk
-            await self._save_results(result)
+            try:
+                await self._save_results(result)
+            except Exception as save_error:
+                logger.warning(f"Error saving results: {str(save_error)}")
+                # Continue processing, don't abort due to save failure
 
             # Record total processing time
             self.metrics["timings"]["total"] = time.time() - start_time
             logger.info(f"Completed enhanced processing for {self.pdf_id}")
 
             return result
-
         except Exception as e:
             logger.error(f"Document processing failed: {str(e)}", exc_info=True)
             # Create a minimal result with error information
@@ -857,6 +860,15 @@ class DocumentProcessor:
 
         logger.info(f"Extracted {len(elements)} content elements with hierarchical context")
         return elements
+
+    def _add_concepts_to_section(self, section_path: str, concepts: List[str]) -> None:
+        """Add concepts to a section in the concept network."""
+        # Skip if no section path or concepts
+        if not section_path or not concepts:
+            return
+
+        # Add to concept network's section mapping
+        self.concept_network.add_section_concepts(section_path, concepts)
 
     def _determine_chunk_level(self, text: str, hierarchy_level: int, section_path: List[str]) -> str:
         """
@@ -1978,6 +1990,32 @@ class DocumentProcessor:
         }
 
         return summary
+
+    async def _save_results(self, result: ProcessingResult) -> None:
+        """Save processing results to disk for later access."""
+        try:
+            # Make sure the output directory exists
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+
+            # Save a summary JSON file
+            summary_path = self.output_dir / "result_summary.json"
+            summary_data = {
+                "pdf_id": result.pdf_id,
+                "element_count": len(result.elements),
+                "chunk_count": len(result.chunks),
+                "procedures_count": len(result.procedures),
+                "parameters_count": len(result.parameters),
+                "primary_concepts": result.concept_network.primary_concepts if hasattr(result, "concept_network") and result.concept_network else [],
+                "timestamp": datetime.utcnow().isoformat()
+            }
+
+            with open(summary_path, "w", encoding="utf-8") as f:
+                json.dump(summary_data, f, ensure_ascii=False, indent=2)
+
+            logger.info(f"Saved result summary to {summary_path}")
+        except Exception as e:
+            # Log the error but don't fail the processing
+            logger.warning(f"Error saving results: {str(e)}")
 
 async def process_technical_document(pdf_id: str, content: bytes, config: dict, openai_client=None):
     processor = DocumentProcessor(pdf_id=pdf_id, config=config, openai_client=openai_client)
