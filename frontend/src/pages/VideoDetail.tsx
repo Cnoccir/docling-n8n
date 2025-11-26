@@ -7,13 +7,6 @@ import { formatNumber, formatRelativeTime, getStatusBadgeClass } from '@/utils/f
 import DocumentChatImproved from '@/components/DocumentChatImproved'; // Will adapt this for video
 
 // YouTube IFrame API types
-declare global {
-  interface Window {
-    YT: typeof YT;
-    onYouTubeIframeAPIReady: () => void;
-  }
-}
-
 interface YT {
   Player: new (elementId: string, config: YTPlayerConfig) => YTPlayer;
   PlayerState: {
@@ -24,6 +17,13 @@ interface YT {
     BUFFERING: number;
     CUED: number;
   };
+}
+
+declare global {
+  interface Window {
+    YT: YT;
+    onYouTubeIframeAPIReady: () => void;
+  }
 }
 
 interface YTPlayerConfig {
@@ -75,7 +75,6 @@ export default function VideoDetail() {
   const [transcript, setTranscript] = useState<TranscriptSegment[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'overview' | 'chat' | 'transcript'>('overview');
-  const [player, setPlayer] = useState<YTPlayer | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const playerRef = useRef<YTPlayer | null>(null);
   const timeUpdateIntervalRef = useRef<number | null>(null);
@@ -138,7 +137,7 @@ export default function VideoDetail() {
       }
 
       try {
-        const newPlayer = new window.YT.Player('youtube-player-chat', {
+        new window.YT.Player('youtube-player-chat', {
           videoId: video.youtube_id,
           playerVars: {
             autoplay: 0,
@@ -149,7 +148,6 @@ export default function VideoDetail() {
           events: {
             onReady: (event: any) => {
               playerRef.current = event.target;
-              setPlayer(event.target);
 
               // Start tracking current time
               if (timeUpdateIntervalRef.current) {
@@ -166,7 +164,7 @@ export default function VideoDetail() {
                 }
               }, 1000);
             },
-            onStateChange: (event: any) => {
+            onStateChange: (_event: any) => {
               // Update time when state changes
               if (playerRef.current) {
                 try {
