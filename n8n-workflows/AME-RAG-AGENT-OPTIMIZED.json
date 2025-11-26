@@ -1,0 +1,246 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "rag-chat",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "id": "ae899ed1-09f0-4723-a0fb-2d00f1f0f81f",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [48, -96],
+      "webhookId": "rag-gold"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "3cc9a8f0-213c-4f90-8dc3-44fe586e8919",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [3200, -96]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ====================================\n// QUERY ANALYZER - Intent Detection\n// ====================================\n\nconst body = $input.first().json.body || $input.first().json;\nconst query = body.query || body.chatInput || '';\n\n// Intent detection\nconst isGreeting = /^(hi|hello|hey|good morning|good afternoon)/i.test(query.trim());\nconst isListDocs = /\\b(list|show|what)\\s+(documents|docs|manuals)\\b/i.test(query);\n\n// Characteristic detection\nconst hasTechnicalTerms = /\\b(span|block|gpm|pump|valve|sensor|controller|wire|wiring|component|module|analog|digital|bacnet|niagara|kitcontrol|honeywell)\\b/i.test(query);\nconst wantsVisuals = /\\b(show|image|diagram|picture|visual|schematic|wiring|drawing)\\b/i.test(query) || /wir(e|ing)/i.test(query);\nconst wantsDetails = /\\b(detailed|spec|specification|table|parameter|configuration|breakdown)\\b/i.test(query);\n\n// Determine query type\nlet queryType = 'technical';\nif (isGreeting) queryType = 'greeting';\nelse if (isListDocs) queryType = 'list_documents';\n\n// Routing flags\nconst needsDocRouting = queryType === 'technical' && !body.doc_id;\n\nreturn [{\n  json: {\n    query,\n    queryType,\n    needsDocRouting,\n    wantsVisuals,\n    wantsDetails,\n    doc_id: body.doc_id || null,\n    top_k: wantsDetails ? 30 : 20,\n    fts_weight: hasTechnicalTerms ? 0.6 : 0.4,\n    vector_weight: hasTechnicalTerms ? 0.4 : 0.6,\n    user_id: body.userId || body.user_id || 'anonymous',\n    username: body.username || 'User'\n  }\n}];"
+      },
+      "id": "1fe1d8d3-d668-45e6-a4c1-fbde8e1570b8",
+      "name": "1. Query Analyzer",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [304, -96]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [{"value1": "={{ $json.queryType }}", "value2": "greeting"}]
+        }
+      },
+      "id": "25f66f1d-e7e1-4402-9fec-c0bfa41a56d2",
+      "name": "2a. Is Greeting?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [512, -96]
+    },
+    {
+      "parameters": {
+        "jsCode": "const analyzer = $input.first().json;\n\nreturn [{\n  json: {\n    answer: \"Hello! I'm your technical documentation assistant. I can help you with information about pumps, valves, wiring, configurations, and more. What would you like to know?\",\n    citations: [],\n    images: [],\n    tables: [],\n    golden_chunks: [],\n    metadata: {\n      timestamp: new Date().toISOString(),\n      queryType: 'greeting',\n      query: analyzer.query,\n      user_id: analyzer.user_id,\n      username: analyzer.username\n    },\n    debug: {\n      pipeline: 'greeting-shortcut',\n      executionPath: 'direct'\n    }\n  }\n}];"
+      },
+      "id": "c5b356f4-7435-4d2d-b963-a2eb40025182",
+      "name": "Greeting Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [704, -224]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [{"value1": "={{ $json.needsDocRouting }}", "value2": true}]
+        }
+      },
+      "id": "e4ddbfa0-046f-4895-a4ed-70c92ac6e35c",
+      "name": "2b. Needs Doc Routing?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [704, 32]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are a document router for a technical documentation system.\n\nUser query: {{ $json.query }}\n\nYour task:\n1. Identify which document types would contain this information\n2. Enhance the query with technical terms and synonyms for better search\n\nReturn ONLY valid JSON (no markdown, no explanation):\n{\n  \"doc_ids\": [\"document_id_1\", \"document_id_2\"],\n  \"enhanced_query\": \"improved search query with technical terms\",\n  \"reasoning\": \"brief explanation\"\n}\n\nExamples:\nQuery: \"How to wire a pump?\"\nResponse: {\"doc_ids\": [\"kitcontrol_manual\"], \"enhanced_query\": \"pump wiring connection configuration analog output controller\", \"reasoning\": \"Wiring info typically in control system manuals\"}\n\nNow process this query and return JSON:"
+      },
+      "id": "df1d624f-b1cd-4656-86bc-fa4200af90ed",
+      "name": "3. Document Router Chain",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.4,
+      "position": [928, 224]
+    },
+    {
+      "parameters": {
+        "options": {"maxTokens": 500, "temperature": 0.3}
+      },
+      "id": "0d33a6c5-d23f-473a-8b23-fc508a78eeb6",
+      "name": "OpenAI Router Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1,
+      "position": [832, 416],
+      "credentials": {
+        "openAiApi": {"id": "mgPrUpycCy78WBt2", "name": "OpenAi account"}
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ====================================\n// PARSE ROUTER OUTPUT\n// ====================================\n\nconst routerOutput = $input.first().json;\nconst analyzer = $('1. Query Analyzer').first().json;\n\nlet parsed;\n\nif (routerOutput.response) {\n  const responseText = routerOutput.response;\n  const jsonMatch = responseText.match(/\\{[\\s\\S]*\\}/);\n  parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : { doc_ids: [], enhanced_query: analyzer.query };\n} else if (routerOutput.doc_ids) {\n  parsed = routerOutput;\n} else {\n  parsed = { doc_ids: [], enhanced_query: analyzer.query };\n}\n\nconst doc_ids = parsed.doc_ids || [];\nconst enhanced_query = parsed.enhanced_query || analyzer.query;\n\nreturn [{\n  json: {\n    query: enhanced_query,\n    doc_ids,\n    top_k: analyzer.top_k,\n    fts_weight: analyzer.fts_weight,\n    vector_weight: analyzer.vector_weight,\n    original_query: analyzer.query,\n    routing_reasoning: parsed.reasoning || 'No routing performed'\n  }\n}];"
+      },
+      "id": "f41b0b1f-7e98-4dff-bf07-197988c371eb",
+      "name": "4. Parse Router Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1216, 224]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ====================================\n// PREPARE SEARCH (No Routing Path)\n// ====================================\n\nconst analyzer = $input.first().json;\n\nreturn [{\n  json: {\n    query: analyzer.query,\n    doc_ids: analyzer.doc_id ? [analyzer.doc_id] : null,\n    top_k: analyzer.top_k,\n    fts_weight: analyzer.fts_weight,\n    vector_weight: analyzer.vector_weight,\n    original_query: analyzer.query,\n    routing_reasoning: 'Direct search without routing'\n  }\n}];"
+      },
+      "id": "01989b7d-b0f8-44e4-bf3b-f5629dc985ce",
+      "name": "4b. Prepare Direct Search",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [912, -96]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://dwisbglrutplhcotbehy.supabase.co/functions/v1/hybrid-search",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  query: $json.query,\n  doc_ids: $json.doc_ids,\n  top_k: $json.top_k,\n  fts_weight: $json.fts_weight,\n  vector_weight: $json.vector_weight\n}) }}",
+        "options": {}
+      },
+      "id": "45d1f9e6-b94a-4780-bfd6-935d7647dcfc",
+      "name": "5. Hybrid Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1424, -96],
+      "credentials": {
+        "supabaseApi": {"id": "wIbJSxriBymUSxSs", "name": "Supabase - Discourse"}
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ====================================\n// EXTRACT CHUNK IDS + GOLDEN CHUNKS\n// ====================================\n\nconst searchResult = $input.first().json;\nconst chunks = searchResult.chunks || [];\n\nif (chunks.length === 0) {\n  return [{\n    json: {\n      error: 'No chunks found',\n      chunk_ids: [],\n      doc_id: null,\n      chunks: [],\n      golden_chunks: []\n    }\n  }];\n}\n\nconst chunk_ids = chunks.map(c => c.id);\nconst doc_id = chunks[0].doc_id;\n\n// Track golden chunks (top matches from hybrid search)\nconst golden_chunks = chunks.slice(0, 5).map(c => ({\n  id: c.id,\n  page: c.page_number,\n  section: c.section_path ? c.section_path.join(' > ') : 'Unknown',\n  score: c.score,\n  match_type: c.match_type,\n  preview: c.content.substring(0, 150)\n}));\n\nreturn [{\n  json: {\n    chunk_ids,\n    doc_id,\n    chunks_count: chunks.length,\n    golden_chunks,\n    chunks_preview: chunks.slice(0, 3).map(c => ({\n      id: c.id,\n      page: c.page_number,\n      preview: c.content.substring(0, 100)\n    }))\n  }\n}];"
+      },
+      "id": "2feb600c-cbb6-4dd0-b309-2b303c5bf2e3",
+      "name": "6. Extract Chunk IDs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1616, -96]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://dwisbglrutplhcotbehy.supabase.co/functions/v1/context-expansion",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  chunk_ids: $json.chunk_ids,\n  doc_id: $json.doc_id,\n  token_budget: 6000,\n  expand_siblings: true,\n  expand_parents: true,\n  expand_children: false,\n  include_images: true,\n  include_tables: true\n}) }}",
+        "options": {}
+      },
+      "id": "41dfbbde-e284-48b3-970d-3648484e0d5f",
+      "name": "7. Context Expansion (with Images & Tables)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1808, -96],
+      "credentials": {
+        "supabaseApi": {"id": "wIbJSxriBymUSxSs", "name": "Supabase - Discourse"}
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ====================================\n// MERGE ALL RESULTS - OPTIMIZED\n// ====================================\n\nconst expansionResult = $('7. Context Expansion (with Images & Tables)').first().json;\nconst goldenChunksData = $('6. Extract Chunk IDs').first().json.golden_chunks || [];\nconst expanded_chunks = expansionResult.expanded_chunks || [];\n\n// Extract golden chunks (seed chunks with highest relevance)\nconst goldenChunks = expanded_chunks\n  .filter(c => c.is_seed === true)\n  .map(c => ({\n    id: c.id,\n    page: c.page_number,\n    section: c.section_path ? c.section_path.join(' > ') : 'Unknown',\n    preview: c.content.substring(0, 200)\n  }));\n\n// Extract all images from chunks (already attached by context-expansion)\nconst allImages = expanded_chunks.flatMap(chunk => chunk.images || []);\n// Deduplicate by image_id\nconst images = allImages.filter((img, index, self) =>\n  index === self.findIndex(i => i.image_id === img.image_id)\n);\n\n// Extract all tables from chunks (already attached by context-expansion)\nconst allTables = expanded_chunks.flatMap(chunk => chunk.tables || []);\n// Deduplicate by table_id\nconst tables = allTables.filter((tbl, index, self) =>\n  index === self.findIndex(t => t.table_id === tbl.table_id)\n);\n\n// Format context for LLM with GOLDEN CHUNK indicators\nconst contextText = expanded_chunks\n  .map(chunk => {\n    const golden = chunk.is_seed ? '🎯 [GOLDEN CHUNK - BEST MATCH] ' : '';\n    const sectionPath = chunk.section_path ? chunk.section_path.join(' > ') : '';\n    return `${golden}[Page ${chunk.page_number}${sectionPath ? ' | ' + sectionPath : ''}]\\n${chunk.content}`;\n  })\n  .join('\\n\\n---\\n\\n');\n\nconst imagesText = images.length > 0\n  ? images\n      .map(img => `[Image - Page ${img.page_number}]: ${img.summary || img.caption || 'Diagram'}`)\n      .join('\\n')\n  : 'No images available';\n\nconst tablesText = tables.length > 0\n  ? tables\n      .map(tbl => `[Table - Page ${tbl.page_number}]:\\n${tbl.markdown}\\n${tbl.description || ''}`)\n      .join('\\n\\n')\n  : 'No tables available';\n\nconst goldenSummary = goldenChunks.length > 0\n  ? goldenChunks\n      .map((c, i) => `${i+1}. ${c.section} (Page ${c.page})`)\n      .join('\\n')\n  : 'No golden chunks identified';\n\nreturn [{\n  json: {\n    context: contextText,\n    images_description: imagesText,\n    tables_content: tablesText,\n    golden_summary: goldenSummary,\n    images_array: images,\n    tables_array: tables,\n    golden_chunks: goldenChunks,\n    metadata: {\n      chunks_count: expanded_chunks.length,\n      golden_chunks_count: goldenChunks.length,\n      images_count: images.length,\n      tables_count: tables.length,\n      expansion_summary: expansionResult.expansion_summary\n    }\n  }\n}];"
+      },
+      "id": "131b3e5f-2916-4844-b826-0ed76c2d03e6",
+      "name": "8. Merge Results (Optimized)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2000, -96]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are a technical documentation assistant for building automation systems. Generate a comprehensive, technically accurate answer.\n\nUser Query: {{ $('1. Query Analyzer').first().json.query }}\n\n=== GOLDEN CHUNKS (Best Matches) ===\nThese are the MOST RELEVANT chunks - prioritize these:\n{{ $json.golden_summary }}\n\n=== FULL CONTEXT (With Hierarchy Expansion) ===\nNote: 🎯 indicates golden chunks (best matches), others provide surrounding context\n{{ $json.context }}\n\n=== AVAILABLE IMAGES ===\n{{ $json.images_description }}\n\n=== AVAILABLE TABLES ===\n{{ $json.tables_content }}\n\n=== INSTRUCTIONS ===\n1. **Prioritize golden chunks (🎯)** - these directly match the query\n2. Use expanded context for comprehensive understanding\n3. Cite specific pages: [Page X] after each fact\n4. Reference images when relevant: \"See wiring diagram [Page X]\"\n5. Reference tables for specs/data: \"See specifications table [Page X]\"\n6. Maintain technical accuracy - use precise terminology\n7. Format with clear headings and bullet points\n8. For wiring/diagram queries: ALWAYS reference available images\n9. For specs/parameters: ALWAYS reference available tables\n10. Acknowledge if context doesn't fully answer the query\n\nGenerate your technical answer:"
+      },
+      "id": "99a4f4a5-9f8e-40fb-9921-3a105ca362b0",
+      "name": "9. Answer Generator Chain",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.4,
+      "position": [2224, -96]
+    },
+    {
+      "parameters": {
+        "options": {"maxTokens": 2000, "temperature": 0.3}
+      },
+      "id": "53f0f11f-4c37-4e6b-9d33-dfbe475270f5",
+      "name": "OpenAI Answer Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1,
+      "position": [2176, 96],
+      "credentials": {
+        "openAiApi": {"id": "mgPrUpycCy78WBt2", "name": "OpenAi account"}
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ====================================\n// FORMAT FINAL RESPONSE - WITH GOLDEN CHUNKS\n// ====================================\n\nconst answerOutput = $input.first().json;\nconst answerText = answerOutput.response || answerOutput.text || answerOutput.output || 'Error generating answer';\nconst mergedData = $('8. Merge Results (Optimized)').first().json;\nconst analyzer = $('1. Query Analyzer').first().json;\n\n// Extract citations\nconst citationRegex = /\\[Page\\s+(\\d+)\\]/gi;\nconst citations = [];\nlet match;\nwhile ((match = citationRegex.exec(answerText)) !== null) {\n  citations.push({ page: parseInt(match[1]) });\n}\n\nconst uniqueCitations = [...new Set(citations.map(c => c.page))].map(page => ({ page }));\n\nreturn [{\n  json: {\n    answer: answerText,\n    citations: uniqueCitations,\n    images: mergedData.images_array,\n    tables: mergedData.tables_array,\n    golden_chunks: mergedData.golden_chunks,\n    metadata: {\n      timestamp: new Date().toISOString(),\n      query: analyzer.query,\n      queryType: analyzer.queryType,\n      chunks_retrieved: mergedData.metadata.chunks_count,\n      golden_chunks_count: mergedData.metadata.golden_chunks_count,\n      images_retrieved: mergedData.metadata.images_count,\n      tables_retrieved: mergedData.metadata.tables_count,\n      expansion_details: mergedData.metadata.expansion_summary,\n      user_id: analyzer.user_id,\n      username: analyzer.username\n    },\n    debug: {\n      wantsVisuals: analyzer.wantsVisuals,\n      wantsDetails: analyzer.wantsDetails,\n      needsDocRouting: analyzer.needsDocRouting,\n      pipeline: 'optimized-golden-chunks-v2',\n      api_calls_saved: 2\n    }\n  }\n}];"
+      },
+      "id": "1b223ac8-9ba5-42e7-9beb-4a8e66aef0ef",
+      "name": "10. Format Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2448, -96]
+    }
+  ],
+  "connections": {
+    "Webhook": {"main": [[{"node": "1. Query Analyzer", "type": "main", "index": 0}]]},
+    "1. Query Analyzer": {"main": [[{"node": "2a. Is Greeting?", "type": "main", "index": 0}]]},
+    "2a. Is Greeting?": {
+      "main": [
+        [{"node": "Greeting Response", "type": "main", "index": 0}],
+        [{"node": "2b. Needs Doc Routing?", "type": "main", "index": 0}]
+      ]
+    },
+    "Greeting Response": {"main": [[{"node": "Respond to Webhook", "type": "main", "index": 0}]]},
+    "2b. Needs Doc Routing?": {
+      "main": [
+        [{"node": "3. Document Router Chain", "type": "main", "index": 0}],
+        [{"node": "4b. Prepare Direct Search", "type": "main", "index": 0}]
+      ]
+    },
+    "3. Document Router Chain": {"main": [[{"node": "4. Parse Router Output", "type": "main", "index": 0}]]},
+    "OpenAI Router Model": {"ai_languageModel": [[{"node": "3. Document Router Chain", "type": "ai_languageModel", "index": 0}]]},
+    "4. Parse Router Output": {"main": [[{"node": "5. Hybrid Search", "type": "main", "index": 0}]]},
+    "4b. Prepare Direct Search": {"main": [[{"node": "5. Hybrid Search", "type": "main", "index": 0}]]},
+    "5. Hybrid Search": {"main": [[{"node": "6. Extract Chunk IDs", "type": "main", "index": 0}]]},
+    "6. Extract Chunk IDs": {"main": [[{"node": "7. Context Expansion (with Images & Tables)", "type": "main", "index": 0}]]},
+    "7. Context Expansion (with Images & Tables)": {"main": [[{"node": "8. Merge Results (Optimized)", "type": "main", "index": 0}]]},
+    "8. Merge Results (Optimized)": {"main": [[{"node": "9. Answer Generator Chain", "type": "main", "index": 0}]]},
+    "9. Answer Generator Chain": {"main": [[{"node": "10. Format Response", "type": "main", "index": 0}]]},
+    "OpenAI Answer Model": {"ai_languageModel": [[{"node": "9. Answer Generator Chain", "type": "ai_languageModel", "index": 0}]]},
+    "10. Format Response": {"main": [[{"node": "Respond to Webhook", "type": "main", "index": 0}]]}
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "7b2e9978814c32d0a3b0dcfec6089a9e22b4a786bbecebb717124ee746c4c60c"
+  }
+}

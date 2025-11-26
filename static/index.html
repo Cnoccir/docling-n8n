@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VectifyAI RAG System</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        .header {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+        }
+        
+        h1 {
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+        
+        .subtitle {
+            color: #666;
+            font-size: 14px;
+        }
+        
+        .main-content {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        
+        .panel {
+            background: white;
+            padding: 25px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        
+        .panel h2 {
+            color: #667eea;
+            margin-bottom: 15px;
+            font-size: 18px;
+        }
+        
+        .query-section {
+            grid-column: 1 / -1;
+        }
+        
+        .input-group {
+            margin-bottom: 15px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: #555;
+        }
+        
+        input[type="text"],
+        select {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #e0e0e0;
+            border-radius: 5px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+        
+        input[type="text"]:focus,
+        select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .checkbox-group input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+        }
+        
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 12px 30px;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+        }
+        
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        
+        .answer-box {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 5px;
+            border-left: 4px solid #667eea;
+            margin-bottom: 20px;
+            min-height: 100px;
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        
+        .stat-card {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            text-align: center;
+        }
+        
+        .stat-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: #667eea;
+        }
+        
+        .stat-label {
+            font-size: 12px;
+            color: #666;
+            margin-top: 5px;
+        }
+        
+        .citation {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 10px;
+            border-left: 3px solid #667eea;
+        }
+        
+        .citation-header {
+            font-weight: 600;
+            color: #667eea;
+            margin-bottom: 5px;
+        }
+        
+        .citation-excerpt {
+            font-size: 13px;
+            color: #666;
+            font-style: italic;
+        }
+        
+        .loading {
+            text-align: center;
+            color: #667eea;
+            padding: 20px;
+        }
+        
+        .error {
+            background: #fee;
+            border-left: 4px solid #e00;
+            padding: 15px;
+            border-radius: 5px;
+            color: #c00;
+        }
+        
+        .example-queries {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-top: 10px;
+        }
+        
+        .example-query {
+            background: #f0f0f0;
+            padding: 8px 15px;
+            border-radius: 15px;
+            font-size: 13px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        
+        .example-query:hover {
+            background: #e0e0e0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔍 VectifyAI RAG System</h1>
+            <p class="subtitle">Document Q&A with Two-Level Retrieval | Powered by VectifyAI Architecture</p>
+        </div>
+        
+        <div class="main-content">
+            <!-- Query Section -->
+            <div class="panel query-section">
+                <h2>Ask a Question</h2>
+                
+                <div class="input-group">
+                    <label for="question">Your Question</label>
+                    <input type="text" id="question" placeholder="What are Niagara browsers?" />
+                    <div class="example-queries">
+                        <span class="example-query" onclick="setQuery('What are Niagara browsers?')">Example 1</span>
+                        <span class="example-query" onclick="setQuery('How do I configure a browser?')">Example 2</span>
+                        <span class="example-query" onclick="setQuery('What is the difference between Web Profile and Browser?')">Example 3</span>
+                    </div>
+                </div>
+                
+                <div class="input-group">
+                    <label for="document">Document</label>
+                    <select id="document">
+                        <option value="">Loading documents...</option>
+                    </select>
+                </div>
+                
+                <div class="input-group">
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="expand_context" checked />
+                        <label for="expand_context">Expand Context (Use section-based expansion)</label>
+                    </div>
+                </div>
+                
+                <button onclick="submitQuery()" id="queryBtn">Search</button>
+            </div>
+            
+            <!-- Answer Section -->
+            <div class="panel">
+                <h2>Answer</h2>
+                <div id="answerSection">
+                    <p style="color: #999; text-align: center;">Ask a question to see the answer</p>
+                </div>
+            </div>
+            
+            <!-- Citations Section -->
+            <div class="panel">
+                <h2>Citations</h2>
+                <div id="citationsSection">
+                    <p style="color: #999; text-align: center;">Citations will appear here</p>
+                </div>
+            </div>
+            
+            <!-- Stats Section -->
+            <div class="panel query-section">
+                <h2>Retrieval Stats</h2>
+                <div id="statsSection">
+                    <p style="color: #999; text-align: center;">Query stats will appear here</p>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        const API_BASE = 'http://localhost:8000';
+        
+        // Load documents on page load
+        async function loadDocuments() {
+            try {
+                const response = await fetch(`${API_BASE}/documents`);
+                const docs = await response.json();
+                
+                const select = document.getElementById('document');
+                select.innerHTML = docs.map(doc => 
+                    `<option value="${doc.id}">${doc.title} (${doc.chunk_count} chunks)</option>`
+                ).join('');
+                
+                if (docs.length === 0) {
+                    select.innerHTML = '<option value="">No documents found</option>';
+                }
+            } catch (error) {
+                console.error('Error loading documents:', error);
+                document.getElementById('document').innerHTML = '<option value="">Error loading documents</option>';
+            }
+        }
+        
+        function setQuery(text) {
+            document.getElementById('question').value = text;
+        }
+        
+        async function submitQuery() {
+            const question = document.getElementById('question').value.trim();
+            const doc_id = document.getElementById('document').value;
+            const expand_context = document.getElementById('expand_context').checked;
+            
+            if (!question) {
+                alert('Please enter a question');
+                return;
+            }
+            
+            // Disable button and show loading
+            const btn = document.getElementById('queryBtn');
+            btn.disabled = true;
+            btn.textContent = 'Searching...';
+            
+            document.getElementById('answerSection').innerHTML = '<div class="loading">🔄 Generating answer...</div>';
+            document.getElementById('citationsSection').innerHTML = '<div class="loading">🔄 Loading citations...</div>';
+            document.getElementById('statsSection').innerHTML = '<div class="loading">🔄 Calculating stats...</div>';
+            
+            try {
+                const response = await fetch(`${API_BASE}/query`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        question,
+                        doc_id: doc_id || null,
+                        top_k: 5,
+                        expand_context
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`API error: ${response.status}`);
+                }
+                
+                const result = await response.json();
+                
+                // Display answer
+                document.getElementById('answerSection').innerHTML = `
+                    <div class="answer-box">
+                        <strong>📝 ${result.answer}</strong>
+                    </div>
+                    <small style="color: #999;">Document: ${result.doc_id}</small>
+                `;
+                
+                // Display citations
+                if (result.citations && result.citations.length > 0) {
+                    document.getElementById('citationsSection').innerHTML = result.citations.map((cite, i) => `
+                        <div class="citation">
+                            <div class="citation-header">
+                                ${i + 1}. Page ${cite.page || '?'}
+                                ${cite.similarity ? `(Similarity: ${cite.similarity.toFixed(3)})` : ''}
+                            </div>
+                            ${cite.excerpt ? `<div class="citation-excerpt">"${cite.excerpt}"</div>` : ''}
+                        </div>
+                    `).join('');
+                } else {
+                    document.getElementById('citationsSection').innerHTML = '<p style="color: #999;">No citations available</p>';
+                }
+                
+                // Display stats
+                document.getElementById('statsSection').innerHTML = `
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <div class="stat-value">${result.stats.chunks_retrieved}</div>
+                            <div class="stat-label">Chunks Retrieved</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value">${result.stats.golden_similarity.toFixed(3)}</div>
+                            <div class="stat-label">Golden Similarity</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value">${(result.stats.context_size / 1000).toFixed(1)}K</div>
+                            <div class="stat-label">Context Size</div>
+                        </div>
+                    </div>
+                `;
+                
+            } catch (error) {
+                console.error('Query error:', error);
+                document.getElementById('answerSection').innerHTML = `
+                    <div class="error">
+                        ❌ Error: ${error.message}<br>
+                        <small>Make sure the API server is running on ${API_BASE}</small>
+                    </div>
+                `;
+                document.getElementById('citationsSection').innerHTML = '';
+                document.getElementById('statsSection').innerHTML = '';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Search';
+            }
+        }
+        
+        // Allow Enter key to submit
+        document.getElementById('question').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                submitQuery();
+            }
+        });
+        
+        // Load documents on page load
+        loadDocuments();
+    </script>
+</body>
+</html>

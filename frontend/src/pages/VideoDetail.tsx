@@ -1,0 +1,407 @@
+import { useEffect, useState, useRef } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
+import { ArrowLeft, Youtube as YoutubeIcon, MessageSquare, BookOpen, FileText } from 'lucide-react';
+import { youtubeApi } from '@/services/api';
+import type { Document } from '@/types'; // Using Document type for video for now, assuming similar structure
+import { formatNumber, formatRelativeTime, getStatusBadgeClass } from '@/utils/format';
+import DocumentChatImproved from '@/components/DocumentChatImproved'; // Will adapt this for video
+
+// YouTube IFrame API types
+declare global {
+  interface Window {
+    YT: typeof YT;
+    onYouTubeIframeAPIReady: () => void;
+  }
+}
+
+interface YT {
+  Player: new (elementId: string, config: YTPlayerConfig) => YTPlayer;
+  PlayerState: {
+    UNSTARTED: number;
+    ENDED: number;
+    PLAYING: number;
+    PAUSED: number;
+    BUFFERING: number;
+    CUED: number;
+  };
+}
+
+interface YTPlayerConfig {
+  videoId: string;
+  height?: string;
+  width?: string;
+  playerVars?: {
+    autoplay?: number;
+    controls?: number;
+    rel?: number;
+    modestbranding?: number;
+  };
+  events?: {
+    onReady?: (event: any) => void;
+    onStateChange?: (event: any) => void;
+  };
+}
+
+interface YTPlayer {
+  playVideo: () => void;
+  pauseVideo: () => void;
+  seekTo: (seconds: number, allowSeekAhead: boolean) => void;
+  getCurrentTime: () => number;
+  getDuration: () => number;
+  getPlayerState: () => number;
+  destroy: () => void;
+}
+
+interface VideoData extends Document {
+  youtube_id: string;
+  source_url: string;
+  duration_seconds: number;
+  channel_name: string;
+  // Add any other video-specific fields
+}
+
+interface TranscriptSegment {
+  timestamp: number;
+  timestamp_formatted: string;
+  text: string;
+  video_url: string;
+}
+
+export default function VideoDetail() {
+  const { videoId } = useParams<{ videoId: string }>();
+  const navigate = useNavigate();
+
+  const [video, setVideo] = useState<VideoData | null>(null);
+  const [transcript, setTranscript] = useState<TranscriptSegment[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState<'overview' | 'chat' | 'transcript'>('overview');
+  const [player, setPlayer] = useState<YTPlayer | null>(null);
+  const [currentTime, setCurrentTime] = useState(0);
+  const playerRef = useRef<YTPlayer | null>(null);
+  const timeUpdateIntervalRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (videoId) {
+      fetchVideoData();
+    }
+  }, [videoId]);
+
+  async function fetchVideoData() {
+    try {
+      setLoading(true);
+
+      const response = await youtubeApi.get(videoId!);
+      setVideo(response.video);
+      setTranscript(response.transcript);
+
+    } catch (error) {
+      console.error('Failed to fetch video:', error);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Load YouTube IFrame API
+  useEffect(() => {
+    // Check if API already loaded
+    if (window.YT && window.YT.Player) {
+      return;
+    }
+
+    // Load YouTube IFrame API script
+    const tag = document.createElement('script');
+    tag.src = 'https://www.youtube.com/iframe_api';
+    const firstScriptTag = document.getElementsByTagName('script')[0];
+    firstScriptTag.parentNode?.insertBefore(tag, firstScriptTag);
+
+    return () => {
+      // Cleanup on unmount
+      if (playerRef.current) {
+        playerRef.current.destroy();
+      }
+      if (timeUpdateIntervalRef.current) {
+        clearInterval(timeUpdateIntervalRef.current);
+      }
+    };
+  }, []);
+
+  // Initialize YouTube player when video data is loaded and in chat tab
+  useEffect(() => {
+    if (!video || activeTab !== 'chat' || !window.YT) {
+      return;
+    }
+
+    // Define the callback for when API is ready
+    const initializePlayer = () => {
+      if (playerRef.current) {
+        playerRef.current.destroy();
+      }
+
+      try {
+        const newPlayer = new window.YT.Player('youtube-player-chat', {
+          videoId: video.youtube_id,
+          playerVars: {
+            autoplay: 0,
+            controls: 1,
+            rel: 0,
+            modestbranding: 1,
+          },
+          events: {
+            onReady: (event: any) => {
+              playerRef.current = event.target;
+              setPlayer(event.target);
+
+              // Start tracking current time
+              if (timeUpdateIntervalRef.current) {
+                clearInterval(timeUpdateIntervalRef.current);
+              }
+              timeUpdateIntervalRef.current = window.setInterval(() => {
+                if (playerRef.current) {
+                  try {
+                    const time = playerRef.current.getCurrentTime();
+                    setCurrentTime(time);
+                  } catch (e) {
+                    // Player might not be ready
+                  }
+                }
+              }, 1000);
+            },
+            onStateChange: (event: any) => {
+              // Update time when state changes
+              if (playerRef.current) {
+                try {
+                  const time = playerRef.current.getCurrentTime();
+                  setCurrentTime(time);
+                } catch (e) {
+                  // Player might not be ready
+                }
+              }
+            },
+          },
+        });
+      } catch (error) {
+        console.error('Failed to initialize YouTube player:', error);
+      }
+    };
+
+    // Check if YT.Player is available, otherwise wait for API to load
+    if (window.YT && window.YT.Player) {
+      initializePlayer();
+    } else {
+      window.onYouTubeIframeAPIReady = initializePlayer;
+    }
+
+    return () => {
+      if (timeUpdateIntervalRef.current) {
+        clearInterval(timeUpdateIntervalRef.current);
+      }
+    };
+  }, [video, activeTab]);
+
+  // Jump to specific timestamp in video
+  const jumpToTimestamp = (seconds: number) => {
+    if (playerRef.current) {
+      try {
+        playerRef.current.seekTo(seconds, true);
+        playerRef.current.playVideo();
+        setCurrentTime(seconds);
+
+        // Ensure chat tab is active
+        if (activeTab !== 'chat') {
+          setActiveTab('chat');
+        }
+      } catch (error) {
+        console.error('Failed to jump to timestamp:', error);
+      }
+    }
+  };
+
+  // Function to format seconds into HH:MM:SS
+  const formatSeconds = (seconds: number) => {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    const parts = [m, s];
+    if (h > 0) parts.unshift(h);
+    return parts.map(v => v < 10 ? '0' + v : v).join(':');
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-gray-500">Loading video details...</div>
+      </div>
+    );
+  }
+
+  if (!video) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-gray-500">Video not found</div>
+      </div>
+    );
+  }
+
+  const youtubeEmbedUrl = `https://www.youtube.com/embed/${video.youtube_id}?autoplay=0&rel=0`;
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-start gap-4">
+        <button
+          onClick={() => navigate('/videos')} // Navigate back to video list
+          className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+        >
+          <ArrowLeft className="w-5 h-5" />
+        </button>
+        <div className="flex-1">
+          <div className="flex items-center gap-3 mb-2">
+            <h1 className="text-3xl font-bold">{video.title}</h1>
+            <span className={getStatusBadgeClass(video.status)}>{video.status}</span>
+          </div>
+          <p className="text-gray-600">{video.channel_name}</p>
+          <div className="flex gap-4 mt-2 text-sm text-gray-500">
+            <span>Processed {formatRelativeTime(video.processed_at)}</span>
+            {video.ingestion_cost_usd && <span>• Cost: ${video.ingestion_cost_usd.toFixed(4)}</span>}
+            {video.processing_duration_seconds && (
+              <span>• Duration: {formatSeconds(video.duration_seconds)}</span>
+            )}
+          </div>
+          {video.source_url && (
+            <a
+              href={video.source_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 mt-3 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors text-sm font-medium"
+            >
+              <YoutubeIcon className="w-4 h-4" />
+              Watch on YouTube
+            </a>
+          )}
+        </div>
+      </div>
+
+      {/* Stats */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="card">
+          <div className="text-sm text-gray-500 mb-1">Duration</div>
+          <div className="text-2xl font-bold">{formatSeconds(video.duration_seconds)}</div>
+        </div>
+        <div className="card">
+          <div className="text-sm text-gray-500 mb-1">Chunks</div>
+          <div className="text-2xl font-bold">{formatNumber(video.total_chunks)}</div>
+        </div>
+        <div className="card">
+          <div className="text-sm text-gray-500 mb-1">Images</div>
+          <div className="text-2xl font-bold">{formatNumber(video.total_images)}</div>
+        </div>
+      </div>
+
+      {/* Tags */}
+      {video.tags && video.tags.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {video.tags.map((tag, i) => (
+            <span key={i} className="px-3 py-1 bg-red-100 text-red-700 rounded-full text-sm">
+              {tag}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Tabs */}
+      <div className="border-b">
+        <div className="flex gap-4">
+          {[
+            { id: 'overview', label: 'Overview', icon: BookOpen },
+            { id: 'chat', label: 'Chat with Video', icon: MessageSquare },
+            { id: 'transcript', label: `Transcript (${transcript.length})`, icon: FileText },
+          ].map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id as any)}
+              className={`flex items-center gap-2 px-4 py-3 border-b-2 transition-colors ${
+                activeTab === tab.id
+                  ? 'border-blue-600 text-blue-600'
+                  : 'border-transparent text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              <tab.icon className="w-4 h-4" />
+              {tab.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Tab Content */}
+      <div className="space-y-6">
+        {activeTab === 'overview' && (
+          <div className="card">
+            <h2 className="text-xl font-semibold mb-4">Video Overview</h2>
+            <div className="aspect-video mb-4">
+              <iframe
+                className="w-full h-full rounded-lg"
+                src={youtubeEmbedUrl}
+                frameBorder="0"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                allowFullScreen
+                title={video.title}
+              ></iframe>
+            </div>
+            {video.summary && (
+              <div>
+                <h3 className="text-lg font-medium mb-2">Summary</h3>
+                <p className="text-gray-700 whitespace-pre-wrap">{video.summary}</p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'chat' && (
+          <div className="flex gap-4 h-[800px]">
+            {/* Left: Video Player */}
+            <div className="w-1/2 border rounded-lg overflow-hidden bg-black shadow-lg relative flex flex-col">
+              {/* Player container */}
+              <div className="flex-1">
+                <div id="youtube-player-chat" className="w-full h-full"></div>
+              </div>
+
+              {/* Current time display */}
+              <div className="bg-gray-900 text-white px-4 py-2 text-sm">
+                Current Time: {formatSeconds(currentTime)} / {formatSeconds(video.duration_seconds)}
+              </div>
+            </div>
+
+            {/* Right: Chat */}
+            <div className="w-1/2">
+              <DocumentChatImproved
+                docId={videoId!}
+                documentTitle={video.title}
+                onTimestampClick={jumpToTimestamp}
+                isVideo={true}
+              />
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'transcript' && (
+          <div className="card">
+            <h2 className="text-xl font-semibold mb-4">Full Transcript</h2>
+            <div className="space-y-3">
+              {transcript.map((segment, index) => (
+                <p key={index} className="text-gray-700 hover:bg-gray-50 p-2 rounded transition-colors">
+                  <button
+                    onClick={() => jumpToTimestamp(segment.timestamp)}
+                    className="text-blue-600 hover:underline font-medium mr-2 cursor-pointer"
+                  >
+                    {segment.timestamp_formatted}
+                  </button>
+                  {segment.text}
+                </p>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

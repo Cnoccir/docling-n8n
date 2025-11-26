@@ -1,0 +1,471 @@
+{
+  "name": "AME RAG - Production",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "rag",
+        "responseMode": "responseNode",
+        "options": {"allowedOrigins": "*"}
+      },
+      "id": "webhook-001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [100, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\nconst query = (body.query || '').trim();\nconst user_id = body.user_id || 'anonymous';\nconst doc_id = body.doc_id || null;\n\nif (!query) {\n  return [{ json: { intent: 'error', error: 'empty_query', query: '', user_id, doc_id } }];\n}\n\nconst lowerQuery = query.toLowerCase();\n\nconst patterns = {\n  greeting: /^(hi|hello|hey|greetings|good morning|good afternoon|good evening)\\b/i,\n  metadata: /^(list|show|get|display|what)\\s+(documents?|files?|manuals?|pdfs?)$/i,\n  visual: /\\b(show|display|find|get)\\s+(image|diagram|picture|schematic|wiring|visual|drawing)s?\\b/i,\n  clarification: /^(it|this|that|they|the)\\s/i\n};\n\nlet intent = 'search';\nif (patterns.greeting.test(lowerQuery)) intent = 'clarification';\nelse if (patterns.metadata.test(lowerQuery)) intent = 'metadata';\nelse if (patterns.visual.test(lowerQuery)) intent = 'visual';\nelse if (patterns.clarification.test(lowerQuery) && query.split(' ').length < 6) intent = 'clarification';\nelse if (query.split(' ').length < 3 && !query.includes('?')) intent = 'clarification';\n\nconst scope = doc_id ? 'single_doc' : 'multi_doc';\n\nreturn [{\n  json: {\n    intent,\n    scope,\n    query,\n    user_id,\n    doc_id,\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "query-analyzer",
+      "name": "1. Query Analyzer",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [300, 500]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "metadata",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": false
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "visual",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": false
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "clarification",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": false
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "error",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": false
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "search",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": false
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "intent-router",
+      "name": "2. Intent Router",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [500, 500]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://dwisbglrutplhcotbehy.supabase.co/rest/v1/rpc/list_documents",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\"p_document_type\": null, \"p_status\": null, \"p_limit\": 50, \"p_offset\": 0} }}",
+        "options": {}
+      },
+      "id": "list-docs",
+      "name": "3a. List Documents",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [700, 200],
+      "credentials": {"supabaseApi": {"id": "wIbJSxriBymUSxSs", "name": "Supabase - Discourse"}}
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\n// Handle array response from Supabase RPC\nconst docs = Array.isArray(response) ? response : [];\n\nif (!docs.length) {\n  return [{ json: { answer: 'No documents found.', documents: [], total: 0 } }];\n}\n\nconst answer = `Found ${docs.length} documents:\\n\\n` + docs.map((d, i) => \n  `${i+1}. **${d.title}**\\n   - Status: ${d.status}\\n   - Pages: ${d.total_pages || 'N/A'}\\n   - Type: ${d.document_type || 'N/A'}\\n   - ID: ${d.doc_id}`\n).join('\\n\\n');\n\nreturn [{ json: { answer, documents: docs, total: docs.length } }];"
+      },
+      "id": "format-docs",
+      "name": "3b. Format Documents",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 200]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://dwisbglrutplhcotbehy.supabase.co/rest/v1/images?select=*,document_index!inner(title)&or=(caption.ilike.*{{ $json.query }}*,basic_summary.ilike.*{{ $json.query }}*){{ $json.doc_id ? '&doc_id=eq.' + $json.doc_id : '' }}&order=page_number&limit=10",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "options": {}
+      },
+      "id": "get-visuals",
+      "name": "4a. Get Visuals",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [700, 300],
+      "credentials": {"supabaseApi": {"id": "wIbJSxriBymUSxSs", "name": "Supabase - Discourse"}}
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst imgs = Array.isArray(response) ? response : [];\n\nif (!imgs.length) {\n  return [{ json: { answer: 'No images found matching your query.', images: [] } }];\n}\n\nconst answer = `Found ${imgs.length} image(s):\\n\\n` + imgs.map((img, i) => {\n  const title = img.document_index?.title || 'Unknown';\n  const url = img.s3_url || img.file_path || 'N/A';\n  return `${i+1}. **${title}** - Page ${img.page_number}\\n   ${img.caption || img.basic_summary || 'No caption'}\\n   URL: ${url}`;\n}).join('\\n\\n');\n\nreturn [{ json: { answer, images: imgs, count: imgs.length } }];"
+      },
+      "id": "format-visuals",
+      "name": "4b. Format Visuals",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst lowerQuery = (data.query || '').toLowerCase();\n\nlet answer;\nif (/^(hi|hello|hey|greetings|good morning|good afternoon|good evening)\\b/i.test(lowerQuery)) {\n  answer = `Hi! I'm a technical documentation assistant. I can help you with:\\n\\n` +\n    `- **List documents:** \"list documents\" or \"show me all manuals\"\\n` +\n    `- **Find diagrams:** \"show wiring diagrams\" or \"display schematics\"\\n` +\n    `- **Answer questions:** \"How to configure PID loop?\" or \"What are the wiring specs?\"\\n\\n` +\n    `What would you like to know?`;\n} else {\n  answer = `I need more specific information. Please clarify:\\n\\n` +\n    `- Which document are you asking about?\\n` +\n    `- What specific component or system?\\n` +\n    `- What action do you want to perform?\\n\\n` +\n    `Example: \"How to configure KitControl PID loop for temperature control?\"`;\n}\n\nreturn [{ json: { answer, clarification_needed: true, original_query: data.query } }];"
+      },
+      "id": "clarification",
+      "name": "5. Clarification Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [700, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nreturn [{ json: { answer: data.error === 'empty_query' ? 'Please provide a query.' : 'An error occurred.', error: true } }];"
+      },
+      "id": "error-response",
+      "name": "6. Error Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [700, 500]
+    },
+    {
+      "parameters": {
+        "conditions": {"string": [{"value1": "={{ $json.doc_id }}", "operation": "isNotEmpty"}]},
+        "options": {}
+      },
+      "id": "has-doc-id",
+      "name": "7. Has doc_id?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [700, 600]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nreturn [{\n  json: {\n    query: data.query,\n    doc_id: data.doc_id,\n    user_id: data.user_id\n  }\n}];"
+      },
+      "id": "single-doc-wrapper",
+      "name": "7a. Single Doc Wrapper",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 550]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://dwisbglrutplhcotbehy.supabase.co/functions/v1/document-router",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\"query\": $json.query, \"max_documents\": 3, \"use_llm_enhancement\": true} }}",
+        "options": {}
+      },
+      "id": "doc-router",
+      "name": "8. Document Router",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 650],
+      "credentials": {"supabaseApi": {"id": "wIbJSxriBymUSxSs", "name": "Supabase - Discourse"}}
+    },
+    {
+      "parameters": {
+        "jsCode": "const routerResult = $input.first().json;\nconst queryData = $('1. Query Analyzer').first().json;\n\n// Check if router returned error or no documents\nconst doc_ids = routerResult.documents?.map(d => d.doc_id) || [];\nif (!doc_ids.length || routerResult.error) {\n  // Output to index 1 for error path\n  return { json: { error: true, answer: 'No relevant documents found for your query.' } };\n}\n\n// Output to index 0 for success path - return array of items for parallel processing\nreturn doc_ids.map(doc_id => ({\n  json: {\n    query: queryData.query,\n    doc_id,\n    user_id: queryData.user_id\n  }\n}));"
+      },
+      "id": "setup-parallel",
+      "name": "9. Setup Parallel Search",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 650]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\n\n// Check if this is an error response\nif (data.error === true) {\n  // Route to output 1 (error path)\n  return [null, { json: data }];\n}\n\n// No error - continue to success path (output 0)\nreturn [{ json: data }];"
+      },
+      "id": "error-check",
+      "name": "9a. Check for Errors",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 650]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\n// Format error response for chat - remove error flag, keep answer\nreturn [{ json: { answer: data.answer || 'No relevant documents found for your query.' } }];"
+      },
+      "id": "format-router-error",
+      "name": "9b. Format Router Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1500, 700]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://dwisbglrutplhcotbehy.supabase.co/functions/v1/hybrid-search",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\"query\": $json.query, \"doc_id\": $json.doc_id, \"top_k\": 5, \"fts_weight\": 0.4, \"vector_weight\": 0.6} }}",
+        "options": {}
+      },
+      "id": "hybrid-search",
+      "name": "10. Hybrid Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1300, 600],
+      "credentials": {"supabaseApi": {"id": "wIbJSxriBymUSxSs", "name": "Supabase - Discourse"}}
+    },
+    {
+      "parameters": {
+        "jsCode": "const allResults = $input.all();\n\n// Extract chunks from all results\nconst allChunks = allResults.flatMap(r => {\n  const json = r.json;\n  // Handle both direct chunks array and nested response\n  const chunks = json.chunks || json.results || [];\n  return chunks.map(c => ({...c, source_doc: json.doc_id || c.doc_id}));\n});\n\nif (!allChunks.length) {\n  return [{ json: { error: true, answer: 'No relevant content found in the documents. Please try rephrasing your query.' } }];\n}\n\n// Sort by score (hybrid search returns score field)\nallChunks.sort((a, b) => (b.score || b.similarity || 0) - (a.score || a.similarity || 0));\nconst goldenChunks = allChunks.slice(0, 5);\n\nreturn [{ json: { golden_chunks: goldenChunks, query: $('1. Query Analyzer').first().json.query } }];"
+      },
+      "id": "merge-results",
+      "name": "11. Merge & Rank Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1500, 600]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\n\n// Check if this is an error response\nif (data.error === true) {\n  // Route to output 1 (error path)\n  return [null, { json: data }];\n}\n\n// Check if we have golden chunks (success)\nif (data.golden_chunks && data.golden_chunks.length > 0) {\n  // Route to output 0 (success path)\n  return [{ json: data }];\n}\n\n// Fallback - treat as error\nreturn [null, { json: { error: true, answer: 'No results found.' } }];"
+      },
+      "id": "results-error-check",
+      "name": "11a. Check Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1700, 600]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\n// Format error response for chat - remove error flag, keep answer\nreturn [{ json: { answer: data.answer || 'An error occurred while processing your request.' } }];"
+      },
+      "id": "format-search-error",
+      "name": "11b. Format Search Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1900, 550]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst chunks = data.golden_chunks;\n\nreturn chunks.map(chunk => ({\n  json: {\n    chunk_ids: [chunk.id],\n    doc_id: chunk.doc_id,\n    query: data.query\n  }\n}));"
+      },
+      "id": "setup-expansion",
+      "name": "12. Setup Context Expansion",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1700, 600]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://dwisbglrutplhcotbehy.supabase.co/functions/v1/context-expansion",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\"chunk_ids\": $json.chunk_ids, \"doc_id\": $json.doc_id, \"token_budget\": 6000, \"expand_siblings\": true, \"expand_parents\": true, \"expand_children\": false, \"include_images\": true, \"include_tables\": true} }}",
+        "options": {}
+      },
+      "id": "context-expansion",
+      "name": "13. Context Expansion",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1900, 600],
+      "credentials": {"supabaseApi": {"id": "wIbJSxriBymUSxSs", "name": "Supabase - Discourse"}}
+    },
+    {
+      "parameters": {
+        "jsCode": "const allExpanded = $input.all();\nconst goldenChunks = $('11. Merge & Rank Results').first().json.golden_chunks;\nconst query = $('1. Query Analyzer').first().json.query;\n\nconst chunks = allExpanded.flatMap(r => r.json.expanded_chunks || []);\nconst images = allExpanded.flatMap(r => r.json.images || []);\nconst tables = allExpanded.flatMap(r => r.json.tables || []);\n\nconst contextText = chunks.map(c => {\n  const golden = c.is_seed ? '🎯 [GOLDEN - BEST MATCH] ' : '';\n  const path = c.section_path?.join(' > ') || 'Unknown';\n  return `${golden}[Page ${c.page_number} | ${path}]\\n${c.content}`;\n}).join('\\n\\n---\\n\\n');\n\nconst imagesText = images.length ? images.map(img => \n  `[Image - Page ${img.page_number}]: ${img.summary || img.caption || 'Diagram'}`\n).join('\\n') : 'No images';\n\nconst tablesText = tables.length ? tables.map(tbl => \n  `[Table - Page ${tbl.page_number}]: ${tbl.description || 'Data table'}`\n).join('\\n') : 'No tables';\n\nreturn [{ json: { context: contextText, images_list: imagesText, tables_list: tablesText, images, tables, query } }];"
+      },
+      "id": "merge-context",
+      "name": "14. Merge Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2100, 600]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are a technical documentation expert for building automation systems.\n\nUser Question: {{ $json.query }}\n\n=== CONTEXT (from technical manuals) ===\n🎯 = Highest relevance match\n\n{{ $json.context }}\n\n=== VISUAL ASSETS ===\n{{ $json.images_list }}\n\n=== DATA TABLES ===\n{{ $json.tables_list }}\n\n=== INSTRUCTIONS ===\n1. Answer ONLY from the provided context - do NOT use external knowledge\n2. ALWAYS cite pages: Use [Page X] after every fact\n3. Reference visuals: \"See diagram [Page X]\" when relevant\n4. Reference tables: \"Refer to table [Page X]\" for specifications\n5. Be technically precise - use exact terminology from source\n6. If context doesn't fully answer, say so explicitly\n7. Structure answer clearly with headings if multiple sections involved\n8. Prioritize 🎯 golden chunks - these are the best matches\n\nGenerate your answer:"
+      },
+      "id": "answer-gen",
+      "name": "15. Answer Generator",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.4,
+      "position": [2300, 600]
+    },
+    {
+      "parameters": {
+        "options": {"maxTokens": 2000, "temperature": 0.3}
+      },
+      "id": "gpt4o",
+      "name": "GPT-4o",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1,
+      "position": [2300, 800],
+      "credentials": {"openAiApi": {"id": "mgPrUpycCy78WBt2", "name": "OpenAi account"}}
+    },
+    {
+      "parameters": {
+        "jsCode": "const llmResponse = $input.first().json;\nconst contextData = $('14. Merge Context').first().json;\nconst query = $('1. Query Analyzer').first().json.query;\nconst goldenChunks = $('11. Merge & Rank Results').first().json.golden_chunks || [];\n\nconst answer = llmResponse.response || llmResponse.text || '';\n\n// Extract page citations and match with chunk data for gdrive_link\nconst pageMatches = [...answer.matchAll(/\\[Page\\s+(\\d+)\\]/gi)];\nconst citations = [];\nconst seenPages = new Set();\n\nfor (const match of pageMatches) {\n  const pageNum = parseInt(match[1]);\n  if (seenPages.has(pageNum)) continue;\n  seenPages.add(pageNum);\n  \n  // Find chunk with this page to get doc info and gdrive_link\n  const chunk = goldenChunks.find(c => c.page_number === pageNum);\n  if (chunk) {\n    citations.push({\n      page: pageNum,\n      doc_id: chunk.doc_id,\n      doc_title: chunk.doc_title || 'Document',\n      gdrive_link: chunk.gdrive_link || null\n    });\n  } else {\n    citations.push({ page: pageNum });\n  }\n}\n\nreturn [{\n  json: {\n    answer,\n    citations: citations.sort((a, b) => a.page - b.page),\n    images: contextData.images || [],\n    tables: contextData.tables || [],\n    metadata: {\n      query,\n      chunks_used: contextData.context?.split('---').length || 0,\n      images_count: contextData.images?.length || 0,\n      tables_count: contextData.tables?.length || 0,\n      timestamp: new Date().toISOString()\n    }\n  }\n}];"
+      },
+      "id": "format-final",
+      "name": "16. Format Final Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2500, 600]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "respond",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2700, 500]
+    }
+  ],
+  "connections": {
+    "Webhook": {"main": [[{"node": "1. Query Analyzer", "type": "main", "index": 0}]]},
+    "1. Query Analyzer": {"main": [[{"node": "2. Intent Router", "type": "main", "index": 0}]]},
+    "2. Intent Router": {
+      "main": [
+        [{"node": "3a. List Documents", "type": "main", "index": 0}],
+        [{"node": "4a. Get Visuals", "type": "main", "index": 0}],
+        [{"node": "5. Clarification Response", "type": "main", "index": 0}],
+        [{"node": "6. Error Response", "type": "main", "index": 0}],
+        [{"node": "7. Has doc_id?", "type": "main", "index": 0}]
+      ]
+    },
+    "3a. List Documents": {"main": [[{"node": "3b. Format Documents", "type": "main", "index": 0}]]},
+    "3b. Format Documents": {"main": [[{"node": "Respond to Webhook", "type": "main", "index": 0}]]},
+    "4a. Get Visuals": {"main": [[{"node": "4b. Format Visuals", "type": "main", "index": 0}]]},
+    "4b. Format Visuals": {"main": [[{"node": "Respond to Webhook", "type": "main", "index": 0}]]},
+    "5. Clarification Response": {"main": [[{"node": "Respond to Webhook", "type": "main", "index": 0}]]},
+    "6. Error Response": {"main": [[{"node": "Respond to Webhook", "type": "main", "index": 0}]]},
+    "7. Has doc_id?": {
+      "main": [
+        [{"node": "7a. Single Doc Wrapper", "type": "main", "index": 0}],
+        [{"node": "8. Document Router", "type": "main", "index": 0}]
+      ]
+    },
+    "7a. Single Doc Wrapper": {"main": [[{"node": "10. Hybrid Search", "type": "main", "index": 0}]]},
+    "8. Document Router": {"main": [[{"node": "9. Setup Parallel Search", "type": "main", "index": 0}]]},
+    "9. Setup Parallel Search": {"main": [[{"node": "9a. Check for Errors", "type": "main", "index": 0}]]},
+    "9a. Check for Errors": {
+      "main": [
+        [{"node": "10. Hybrid Search", "type": "main", "index": 0}],
+        [{"node": "9b. Format Router Error", "type": "main", "index": 0}]
+      ]
+    },
+    "9b. Format Router Error": {"main": [[{"node": "Respond to Webhook", "type": "main", "index": 0}]]},
+    "10. Hybrid Search": {"main": [[{"node": "11. Merge & Rank Results", "type": "main", "index": 0}]]},
+    "11. Merge & Rank Results": {"main": [[{"node": "11a. Check Results", "type": "main", "index": 0}]]},
+    "11a. Check Results": {
+      "main": [
+        [{"node": "12. Setup Context Expansion", "type": "main", "index": 0}],
+        [{"node": "11b. Format Search Error", "type": "main", "index": 0}]
+      ]
+    },
+    "11b. Format Search Error": {"main": [[{"node": "Respond to Webhook", "type": "main", "index": 0}]]},
+    "12. Setup Context Expansion": {"main": [[{"node": "13. Context Expansion", "type": "main", "index": 0}]]},
+    "13. Context Expansion": {"main": [[{"node": "14. Merge Context", "type": "main", "index": 0}]]},
+    "14. Merge Context": {"main": [[{"node": "15. Answer Generator", "type": "main", "index": 0}]]},
+    "15. Answer Generator": {"main": [[{"node": "16. Format Final Response", "type": "main", "index": 0}]]},
+    "GPT-4o": {"ai_languageModel": [[{"node": "15. Answer Generator", "type": "ai_languageModel", "index": 0}]]},
+    "16. Format Final Response": {"main": [[{"node": "Respond to Webhook", "type": "main", "index": 0}]]}
+  },
+  "settings": {"executionOrder": "v1"},
+  "meta": {"instanceId": "ame-rag-production"}
+}

@@ -1,0 +1,524 @@
+{
+  "name": "RAG Chat Workflow - Fixed",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "rag-chat",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "id": "6e954b30-3555-48c2-8e39-4a107ce28c4b",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [260, 240],
+      "webhookId": "b363c916-c6f3-4f80-bcba-97e6b34322e7"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\nconst query = (body.query || '').trim();\nconst user_id = body.user_id || 'anonymous';\nconst doc_id = body.doc_id || null;\n\nif (!query) {\n  return [{ json: { intent: 'error', error: 'empty_query', query: '', user_id, doc_id } }];\n}\n\nconst lowerQuery = query.toLowerCase();\n\nconst patterns = {\n  greeting: /^(hi|hello|hey|greetings|good morning|good afternoon|good evening)\\b/i,\n  metadata: /^(list|show|get|display|what)\\s+(documents?|files?|manuals?|pdfs?)$/i,\n  visual: /\\b(show|display|find|get)\\s+(image|diagram|picture|schematic|wiring|visual|drawing)s?\\b/i,\n  clarification: /^(it|this|that|they|the)\\s/i\n};\n\nlet intent = 'search';\nif (patterns.greeting.test(lowerQuery)) intent = 'clarification';\nelse if (patterns.metadata.test(lowerQuery)) intent = 'metadata';\nelse if (patterns.visual.test(lowerQuery)) intent = 'visual';\nelse if (patterns.clarification.test(lowerQuery) && query.split(' ').length < 6) intent = 'clarification';\nelse if (query.split(' ').length < 3 && !query.includes('?')) intent = 'clarification';\n\nconst scope = doc_id ? 'single_doc' : 'multi_doc';\n\nreturn [{\n  json: {\n    intent,\n    scope,\n    query,\n    user_id,\n    doc_id,\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "f4e42e3b-3caf-4295-914c-def9ef9c625e",
+      "name": "1. Query Analyzer",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 240]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "string": [
+                  {
+                    "value1": "={{ $json.intent }}",
+                    "operation": "equals",
+                    "value2": "metadata"
+                  }
+                ]
+              }
+            },
+            {
+              "conditions": {
+                "string": [
+                  {
+                    "value1": "={{ $json.intent }}",
+                    "operation": "equals",
+                    "value2": "visual"
+                  }
+                ]
+              }
+            },
+            {
+              "conditions": {
+                "string": [
+                  {
+                    "value1": "={{ $json.intent }}",
+                    "operation": "equals",
+                    "value2": "clarification"
+                  }
+                ]
+              }
+            },
+            {
+              "conditions": {
+                "string": [
+                  {
+                    "value1": "={{ $json.intent }}",
+                    "operation": "equals",
+                    "value2": "error"
+                  }
+                ]
+              }
+            },
+            {
+              "conditions": {
+                "string": [
+                  {
+                    "value1": "={{ $json.intent }}",
+                    "operation": "equals",
+                    "value2": "search"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "94fcb625-e465-4cb8-b364-5be2ffe7fbda",
+      "name": "2. Intent Router",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [700, 240]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://dwisbglrutplhcotbehy.supabase.co/rest/v1/rpc/list_documents",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\"p_document_type\": null, \"p_status\": null, \"p_limit\": 50, \"p_offset\": 0} }}",
+        "options": {}
+      },
+      "id": "36aabc90-2d1c-4323-a94e-e74fde417369",
+      "name": "3a. List Documents",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [920, 40],
+      "credentials": {
+        "supabaseApi": {
+          "id": "wIbJSxriBymUSxSs",
+          "name": "Supabase - Discourse"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const docs = $input.first().json;\n\nif (!Array.isArray(docs) || docs.length === 0) {\n  return [{ json: { answer: 'No documents found in the system.', documents: [] } }];\n}\n\nconst docList = docs.map((d, i) => \n  `${i + 1}. **${d.title}** (${d.document_type})\\n   - Status: ${d.status}\\n   - Pages: ${d.total_pages || 'N/A'}\\n   - ID: ${d.doc_id}`\n).join('\\n\\n');\n\nconst answer = `Found ${docs.length} document(s):\\n\\n${docList}`;\n\nreturn [{ json: { answer, documents: docs, count: docs.length } }];"
+      },
+      "id": "3b1c4f5e-6d7e-8a9f-0b1c-2d3e4f5a6b7c",
+      "name": "3b. Format Document List",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1140, 40]
+    },
+    {
+      "parameters": {
+        "url": "=https://dwisbglrutplhcotbehy.supabase.co/rest/v1/images?select=*,document_index!inner(title)&or=(caption.ilike.*{{ $json.query }}*,basic_summary.ilike.*{{ $json.query }}*){{ $json.doc_id ? '&doc_id=eq.' + $json.doc_id : '' }}&order=page_number&limit=10",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "options": {}
+      },
+      "id": "3bd35b74-cca9-491c-a5e9-91531e6ec2ac",
+      "name": "4a. Get Visuals",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [920, 160],
+      "credentials": {
+        "supabaseApi": {
+          "id": "wIbJSxriBymUSxSs",
+          "name": "Supabase - Discourse"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const images = $input.first().json;\n\nif (!Array.isArray(images) || images.length === 0) {\n  return [{ json: { answer: 'No visual content found matching your query.', images: [] } }];\n}\n\nconst imageList = images.map((img, i) => {\n  const docTitle = img.document_index?.title || 'Unknown';\n  return `${i + 1}. **${docTitle}** - Page ${img.page_number}\\n` +\n    `   - Caption: ${img.caption || 'N/A'}\\n` +\n    `   - Summary: ${img.basic_summary || 'N/A'}\\n` +\n    `   - URL: ${img.file_path}`;\n}).join('\\n\\n');\n\nconst answer = `Found ${images.length} visual(s):\\n\\n${imageList}`;\n\nreturn [{ json: { answer, images, count: images.length } }];"
+      },
+      "id": "4b2c3d4e-5f6a-7b8c-9d0e-1f2a3b4c5d6e",
+      "name": "4b. Format Visuals",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1140, 160]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst lowerQuery = (data.query || '').toLowerCase();\n\nlet answer;\nif (/^(hi|hello|hey|greetings|good morning|good afternoon|good evening)\\b/i.test(lowerQuery)) {\n  answer = `Hi! I'm a technical documentation assistant. I can help you with:\\n\\n` +\n    `- **List documents:** \"list documents\" or \"show me all manuals\"\\n` +\n    `- **Find diagrams:** \"show wiring diagrams\" or \"display schematics\"\\n` +\n    `- **Answer questions:** \"How to configure PID loop?\" or \"What are the wiring specs?\"\\n\\n` +\n    `What would you like to know?`;\n} else {\n  answer = `I need more specific information. Please clarify:\\n\\n` +\n    `- Which document are you asking about?\\n` +\n    `- What specific component or system?\\n` +\n    `- What action do you want to perform?\\n\\n` +\n    `Example: \"How to configure KitControl PID loop for temperature control?\"`;\n}\n\nreturn [{ json: { answer, clarification_needed: true, original_query: data.query } }];"
+      },
+      "id": "6f08ef57-3337-45b2-800a-4a85366261eb",
+      "name": "5. Clarification Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [920, 280]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nreturn [{ json: { answer: data.error === 'empty_query' ? 'Please provide a query.' : 'An error occurred.', error: true } }];"
+      },
+      "id": "efa3dd1c-422a-498f-9513-4bb42774f54a",
+      "name": "6. Error Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [920, 400]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.doc_id }}",
+              "operation": "isNotEmpty"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "e88f53a3-8a6e-4845-97ed-b2e4a641b9ed",
+      "name": "7a. Has doc_id?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [920, 520]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://dwisbglrutplhcotbehy.supabase.co/rest/v1/rpc/search_chunks",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\n  \"query_text\": $json.query,\n  \"match_threshold\": 0.7,\n  \"match_count\": 5,\n  \"filter_doc_id\": $json.doc_id\n} }}",
+        "options": {}
+      },
+      "id": "7b1c2d3e-4f5a-6b7c-8d9e-0f1a2b3c4d5e",
+      "name": "7b. Search Single Doc",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1140, 460],
+      "credentials": {
+        "supabaseApi": {
+          "id": "wIbJSxriBymUSxSs",
+          "name": "Supabase - Discourse"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://dwisbglrutplhcotbehy.supabase.co/rest/v1/rpc/search_chunks",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\n  \"query_text\": $json.query,\n  \"match_threshold\": 0.7,\n  \"match_count\": 5\n} }}",
+        "options": {}
+      },
+      "id": "7c2d3e4f-5a6b-7c8d-9e0f-1a2b3c4d5e6f",
+      "name": "7c. Search All Docs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1140, 580],
+      "credentials": {
+        "supabaseApi": {
+          "id": "wIbJSxriBymUSxSs",
+          "name": "Supabase - Discourse"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const searchResults = $input.first().json;\nconst query = $('2. Intent Router').first().json.query;\n\nif (!Array.isArray(searchResults) || searchResults.length === 0) {\n  return [{ json: { \n    answer: 'I could not find relevant information for your query. Please try rephrasing or check if the document is in the system.',\n    chunks: [],\n    query\n  }}];\n}\n\n// Build context from chunks\nconst context = searchResults.map((chunk, i) => \n  `[${i + 1}] ${chunk.text} (from ${chunk.doc_title}, page ${chunk.page_number})`\n).join('\\n\\n');\n\nreturn [{ json: { context, chunks: searchResults, query } }];"
+      },
+      "id": "8a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+      "name": "8. Build Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1360, 520]
+    },
+    {
+      "parameters": {
+        "options": {
+          "systemMessage": "You are a helpful technical documentation assistant. Answer questions based ONLY on the provided context. If the context doesn't contain enough information, say so. Always cite the source (document name and page number) for your answers."
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=Context from documents:\n{{ $json.context }}\n\nUser question: {{ $json.query }}\n\nProvide a clear, accurate answer based on the context above. Include citations."
+            }
+          ]
+        }
+      },
+      "id": "9a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+      "name": "9. Generate Answer (OpenAI)",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1,
+      "position": [1580, 520]
+    },
+    {
+      "parameters": {
+        "jsCode": "const llmResponse = $input.first().json;\nconst chunks = $('8. Build Context').first().json.chunks;\nconst query = $('8. Build Context').first().json.query;\n\nconst answer = llmResponse.output || llmResponse.text || 'Unable to generate answer.';\n\nconst sources = chunks.map(c => ({\n  doc_id: c.doc_id,\n  doc_title: c.doc_title,\n  page_number: c.page_number,\n  similarity: c.similarity\n}));\n\nreturn [{ json: { answer, sources, query } }];"
+      },
+      "id": "10a1b2c3-4d5e-6f7a-8b9c-0d1e2f3a4b5c",
+      "name": "10. Format RAG Answer",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1800, 520]
+    },
+    {
+      "parameters": {},
+      "id": "11a2b3c4-5d6e-7f8a-9b0c-1d2e3f4a5b6c",
+      "name": "11. Merge All Responses",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2.1,
+      "position": [2020, 340]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "12a3b4c5-6d7e-8f9a-0b1c-2d3e4f5a6b7c",
+      "name": "12. Webhook Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2240, 340]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "1. Query Analyzer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "1. Query Analyzer": {
+      "main": [
+        [
+          {
+            "node": "2. Intent Router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "2. Intent Router": {
+      "main": [
+        [
+          {
+            "node": "3a. List Documents",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "4a. Get Visuals",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "5. Clarification Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "6. Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "7a. Has doc_id?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "3a. List Documents": {
+      "main": [
+        [
+          {
+            "node": "3b. Format Document List",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "3b. Format Document List": {
+      "main": [
+        [
+          {
+            "node": "11. Merge All Responses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "4a. Get Visuals": {
+      "main": [
+        [
+          {
+            "node": "4b. Format Visuals",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "4b. Format Visuals": {
+      "main": [
+        [
+          {
+            "node": "11. Merge All Responses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "5. Clarification Response": {
+      "main": [
+        [
+          {
+            "node": "11. Merge All Responses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "6. Error Response": {
+      "main": [
+        [
+          {
+            "node": "11. Merge All Responses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "7a. Has doc_id?": {
+      "main": [
+        [
+          {
+            "node": "7b. Search Single Doc",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "7c. Search All Docs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "7b. Search Single Doc": {
+      "main": [
+        [
+          {
+            "node": "8. Build Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "7c. Search All Docs": {
+      "main": [
+        [
+          {
+            "node": "8. Build Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "8. Build Context": {
+      "main": [
+        [
+          {
+            "node": "9. Generate Answer (OpenAI)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "9. Generate Answer (OpenAI)": {
+      "main": [
+        [
+          {
+            "node": "10. Format RAG Answer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "10. Format RAG Answer": {
+      "main": [
+        [
+          {
+            "node": "11. Merge All Responses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "11. Merge All Responses": {
+      "main": [
+        [
+          {
+            "node": "12. Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "7b2e9978814c32d0a3b0dcfec6089a9e22b4a786bbecebb717124ee746c4c60c"
+  },
+  "tags": []
+}

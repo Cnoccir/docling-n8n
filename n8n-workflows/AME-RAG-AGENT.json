@@ -1,0 +1,994 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "rag-chat",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "id": "ae899ed1-09f0-4723-a0fb-2d00f1f0f81f",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        48,
+        -96
+      ],
+      "webhookId": "rag-gold"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "3cc9a8f0-213c-4f90-8dc3-44fe586e8919",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        3600,
+        -192
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ====================================\n// QUERY ANALYZER - Intent Detection\n// ====================================\n\nconst body = $input.first().json.body || $input.first().json;\nconst query = body.query || body.chatInput || '';\n\n// Intent detection\nconst isGreeting = /^(hi|hello|hey|good morning|good afternoon)/i.test(query.trim());\nconst isListDocs = /\\b(list|show|what)\\s+(documents|docs|manuals)\\b/i.test(query);\n\n// Characteristic detection\nconst hasTechnicalTerms = /\\b(span|block|gpm|pump|valve|sensor|controller|wire|wiring|component|module|analog|digital|bacnet|niagara|kitcontrol|honeywell)\\b/i.test(query);\nconst wantsVisuals = /\\b(show|image|diagram|picture|visual|schematic|wiring|drawing)\\b/i.test(query) || /wir(e|ing)/i.test(query);\nconst wantsDetails = /\\b(detailed|spec|specification|table|parameter|configuration|breakdown)\\b/i.test(query);\n\n// Determine query type\nlet queryType = 'technical';\nif (isGreeting) queryType = 'greeting';\nelse if (isListDocs) queryType = 'list_documents';\n\n// Routing flags\nconst needsDocRouting = queryType === 'technical' && !body.doc_id;\nconst needsImages = wantsVisuals && queryType === 'technical';\nconst needsTables = wantsDetails && queryType === 'technical';\n\nreturn [{\n  json: {\n    query,\n    queryType,\n    needsDocRouting,\n    needsImages,\n    needsTables,\n    doc_id: body.doc_id || null,\n    top_k: wantsDetails ? 30 : 20,\n    fts_weight: hasTechnicalTerms ? 0.6 : 0.4,\n    vector_weight: hasTechnicalTerms ? 0.4 : 0.6,\n    user_id: body.userId || body.user_id || 'anonymous',\n    username: body.username || 'User'\n  }\n}];"
+      },
+      "id": "1fe1d8d3-d668-45e6-a4c1-fbde8e1570b8",
+      "name": "1. Query Analyzer",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        304,
+        -96
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.queryType }}",
+              "value2": "greeting"
+            }
+          ]
+        }
+      },
+      "id": "25f66f1d-e7e1-4402-9fec-c0bfa41a56d2",
+      "name": "2a. Is Greeting?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        512,
+        -96
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const analyzer = $input.first().json;\n\nreturn [{\n  json: {\n    answer: \"Hello! I'm your technical documentation assistant. I can help you with information about pumps, valves, wiring, configurations, and more. What would you like to know?\",\n    citations: [],\n    images: [],\n    tables: [],\n    metadata: {\n      timestamp: new Date().toISOString(),\n      queryType: 'greeting',\n      query: analyzer.query,\n      user_id: analyzer.user_id,\n      username: analyzer.username\n    },\n    debug: {\n      pipeline: 'greeting-shortcut',\n      executionPath: 'direct'\n    }\n  }\n}];"
+      },
+      "id": "c5b356f4-7435-4d2d-b963-a2eb40025182",
+      "name": "Greeting Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        704,
+        -224
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.needsDocRouting }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "e4ddbfa0-046f-4895-a4ed-70c92ac6e35c",
+      "name": "2b. Needs Doc Routing?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        704,
+        32
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are a document router for a technical documentation system.\n\nUser query: {{ $json.query }}\n\nYour task:\n1. Identify which document types would contain this information\n2. Enhance the query with technical terms and synonyms for better search\n\nReturn ONLY valid JSON (no markdown, no explanation):\n{\n  \"doc_ids\": [\"document_id_1\", \"document_id_2\"],\n  \"enhanced_query\": \"improved search query with technical terms\",\n  \"reasoning\": \"brief explanation\"\n}\n\nExamples:\nQuery: \"How to wire a pump?\"\nResponse: {\"doc_ids\": [\"kitcontrol_manual\"], \"enhanced_query\": \"pump wiring connection configuration analog output controller\", \"reasoning\": \"Wiring info typically in control system manuals\"}\n\nNow process this query and return JSON:"
+      },
+      "id": "df1d624f-b1cd-4656-86bc-fa4200af90ed",
+      "name": "3. Document Router Chain",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.4,
+      "position": [
+        928,
+        224
+      ]
+    },
+    {
+      "parameters": {
+        "options": {
+          "maxTokens": 500,
+          "temperature": 0.3
+        }
+      },
+      "id": "0d33a6c5-d23f-473a-8b23-fc508a78eeb6",
+      "name": "OpenAI Router Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1,
+      "position": [
+        832,
+        416
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "mgPrUpycCy78WBt2",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ====================================\n// PARSE ROUTER OUTPUT\n// ====================================\n\nconst routerOutput = $input.first().json;\nconst analyzer = $('1. Query Analyzer').first().json;\n\nlet parsed;\n\n// Handle different output formats\nif (routerOutput.response) {\n  // LLM Chain returns {response: \"...\"}\n  const responseText = routerOutput.response;\n  const jsonMatch = responseText.match(/\\{[\\s\\S]*\\}/);\n  parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : { doc_ids: [], enhanced_query: analyzer.query };\n} else if (routerOutput.doc_ids) {\n  // Already parsed JSON\n  parsed = routerOutput;\n} else {\n  // Fallback\n  parsed = { doc_ids: [], enhanced_query: analyzer.query };\n}\n\nconst doc_ids = parsed.doc_ids || [];\nconst enhanced_query = parsed.enhanced_query || analyzer.query;\n\nreturn [{\n  json: {\n    query: enhanced_query,\n    doc_ids,\n    top_k: analyzer.top_k,\n    fts_weight: analyzer.fts_weight,\n    vector_weight: analyzer.vector_weight,\n    original_query: analyzer.query,\n    routing_reasoning: parsed.reasoning || 'No routing performed'\n  }\n}];"
+      },
+      "id": "f41b0b1f-7e98-4dff-bf07-197988c371eb",
+      "name": "4. Parse Router Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1216,
+        224
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ====================================\n// PREPARE SEARCH (No Routing Path)\n// ====================================\n\nconst analyzer = $input.first().json;\n\nreturn [{\n  json: {\n    query: analyzer.query,\n    doc_ids: analyzer.doc_id ? [analyzer.doc_id] : null,\n    top_k: analyzer.top_k,\n    fts_weight: analyzer.fts_weight,\n    vector_weight: analyzer.vector_weight,\n    original_query: analyzer.query,\n    routing_reasoning: 'Direct search without routing'\n  }\n}];"
+      },
+      "id": "01989b7d-b0f8-44e4-bf3b-f5629dc985ce",
+      "name": "4b. Prepare Direct Search",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        912,
+        -96
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://dwisbglrutplhcotbehy.supabase.co/functions/v1/hybrid-search",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  query: $json.query,\n  doc_ids: $json.doc_ids,\n  top_k: $json.top_k,\n  fts_weight: $json.fts_weight,\n  vector_weight: $json.vector_weight\n}) }}",
+        "options": {}
+      },
+      "id": "45d1f9e6-b94a-4780-bfd6-935d7647dcfc",
+      "name": "5. Hybrid Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1424,
+        -96
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "wIbJSxriBymUSxSs",
+          "name": "Supabase - Discourse"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ====================================\n// EXTRACT CHUNK IDS\n// ====================================\n\nconst searchResult = $input.first().json;\nconst chunks = searchResult.chunks || [];\n\nif (chunks.length === 0) {\n  return [{\n    json: {\n      error: 'No chunks found',\n      chunk_ids: [],\n      doc_id: null,\n      chunks: []\n    }\n  }];\n}\n\nconst chunk_ids = chunks.map(c => c.id);\nconst doc_id = chunks[0].doc_id;\n\nreturn [{\n  json: {\n    chunk_ids,\n    doc_id,\n    chunks_count: chunks.length,\n    chunks_preview: chunks.slice(0, 3).map(c => ({\n      id: c.id,\n      page: c.page_number,\n      preview: c.content.substring(0, 100)\n    }))\n  }\n}];"
+      },
+      "id": "2feb600c-cbb6-4dd0-b309-2b303c5bf2e3",
+      "name": "6. Extract Chunk IDs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1616,
+        -96
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://dwisbglrutplhcotbehy.supabase.co/functions/v1/context-expansion",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  chunk_ids: $json.chunk_ids,\n  doc_id: $json.doc_id,\n  token_budget: 6000,\n  expand_siblings: true,\n  expand_parents: true\n}) }}",
+        "options": {}
+      },
+      "id": "41dfbbde-e284-48b3-970d-3648484e0d5f",
+      "name": "7. Context Expansion",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1792,
+        -96
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "wIbJSxriBymUSxSs",
+          "name": "Supabase - Discourse"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $('1. Query Analyzer').first().json.needsImages }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "23a0798b-eba7-46da-8b98-f8c98af32e0d",
+      "name": "8. Needs Images?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1968,
+        96
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://dwisbglrutplhcotbehy.supabase.co/functions/v1/retrieve-with-images",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  chunk_ids: $('6. Extract Chunk IDs').first().json.chunk_ids\n}) }}",
+        "options": {}
+      },
+      "id": "84a3429b-ba43-4fd3-8fe5-d9f7b2dd1414",
+      "name": "9a. Retrieve Images",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        2144,
+        -96
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "wIbJSxriBymUSxSs",
+          "name": "Supabase - Discourse"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $('1. Query Analyzer').first().json.needsTables }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "2d52a50a-9b96-45ab-9899-dcf0c17c8600",
+      "name": "9b. Needs Tables?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        2336,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://dwisbglrutplhcotbehy.supabase.co/functions/v1/retrieve-with-tables",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  chunk_ids: $('6. Extract Chunk IDs').first().json.chunk_ids\n}) }}",
+        "options": {}
+      },
+      "id": "564f35be-f4c0-4d42-aaa2-823dcf34fcd2",
+      "name": "10a. Retrieve Tables",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        2528,
+        -96
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "wIbJSxriBymUSxSs",
+          "name": "Supabase - Discourse"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ====================================\n// MERGE ALL RESULTS - FIXED\n// ====================================\n\nconst expansionResult = $('7. Context Expansion').first().json;\n\n// Safely get nodes - they may not have executed\nlet imagesNode = null;\nlet tablesNode = null;\n\ntry {\n  imagesNode = $('9a. Retrieve Images').first();\n} catch (e) {\n  // Node didn't execute, that's ok\n}\n\ntry {\n  tablesNode = $('10a. Retrieve Tables').first();\n} catch (e) {\n  // Node didn't execute, that's ok\n}\n\nconst expanded_chunks = expansionResult.expanded_chunks || [];\n\n// Extract images if retrieved\nconst images = (imagesNode && imagesNode.json && imagesNode.json.chunks)\n  ? imagesNode.json.chunks.flatMap(c => c.images || [])\n  : [];\n\n// Extract tables if retrieved\nconst tables = (tablesNode && tablesNode.json && tablesNode.json.chunks)\n  ? tablesNode.json.chunks.flatMap(c => c.tables || [])\n  : [];\n\n// Format context for LLM\nconst contextText = expanded_chunks\n  .map(chunk => `[Page ${chunk.page_number}]\\n${chunk.content}`)\n  .join('\\n\\n---\\n\\n');\n\nconst imagesText = images.length > 0\n  ? images\n      .map(img => `[Image - Page ${img.page_number}]: ${img.caption || img.summary || 'Diagram'}`)\n      .join('\\n')\n  : 'No images available';\n\nconst tablesText = tables.length > 0\n  ? tables\n      .map(tbl => `[Table - Page ${tbl.page_number}]:\\n${tbl.markdown}\\n${tbl.description || ''}`)\n      .join('\\n\\n')\n  : 'No tables available';\n\nreturn [\n  {\n    json: {\n      context: contextText,\n      images_description: imagesText,\n      tables_content: tablesText,\n      images_array: images,\n      tables_array: tables,\n      metadata: {\n        chunks_count: expanded_chunks.length,\n        images_count: images.length,\n        tables_count: tables.length,\n      },\n    },\n  },\n];\n"
+      },
+      "id": "131b3e5f-2916-4844-b826-0ed76c2d03e6",
+      "name": "11. Merge Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2736,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are a technical documentation assistant. Generate a comprehensive answer based on the retrieved context.\n\nUser Query: {{ $('1. Query Analyzer').first().json.query }}\n\n=== RETRIEVED CONTEXT ===\n{{ $json.context }}\n\n=== AVAILABLE IMAGES ===\n{{ $json.images_description }}\n\n=== AVAILABLE TABLES ===\n{{ $json.tables_content }}\n\n=== INSTRUCTIONS ===\n1. Answer the user's query comprehensively using the context provided\n2. Cite specific pages using [Page X] format after each fact\n3. If images are available and relevant, reference them: \"See the wiring diagram [Page 45]\"\n4. If tables are available, reference them: \"See specifications table [Page 46]\"\n5. Use clear formatting with headings and bullet points\n6. Be technical and accurate\n7. If context doesn't fully answer the query, acknowledge limitations\n\nGenerate your answer:"
+      },
+      "id": "99a4f4a5-9f8e-40fb-9921-3a105ca362b0",
+      "name": "12. Answer Generator Chain",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.4,
+      "position": [
+        2960,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "options": {
+          "maxTokens": 2000,
+          "temperature": 0.3
+        }
+      },
+      "id": "53f0f11f-4c37-4e6b-9d33-dfbe475270f5",
+      "name": "OpenAI Answer Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1,
+      "position": [
+        2912,
+        320
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "mgPrUpycCy78WBt2",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ====================================\n// FORMAT FINAL RESPONSE\n// ====================================\n\nconst answerOutput = $input.first().json;\nconst answerText = answerOutput.response || answerOutput.text || answerOutput.output || 'Error generating answer';\nconst mergedData = $('11. Merge Results').first().json;\nconst analyzer = $('1. Query Analyzer').first().json;\n\n// Extract citations\nconst citationRegex = /\\[Page\\s+(\\d+)\\]/gi;\nconst citations = [];\nlet match;\nwhile ((match = citationRegex.exec(answerText)) !== null) {\n  citations.push({ page: parseInt(match[1]) });\n}\n\n// Get unique citations\nconst uniqueCitations = [...new Set(citations.map(c => c.page))].map(page => ({ page }));\n\nreturn [{\n  json: {\n    answer: answerText,\n    citations: uniqueCitations,\n    images: mergedData.images_array,\n    tables: mergedData.tables_array,\n    metadata: {\n      timestamp: new Date().toISOString(),\n      query: analyzer.query,\n      queryType: analyzer.queryType,\n      chunks_retrieved: mergedData.metadata.chunks_count,\n      images_retrieved: mergedData.metadata.images_count,\n      tables_retrieved: mergedData.metadata.tables_count,\n      user_id: analyzer.user_id,\n      username: analyzer.username\n    },\n    debug: {\n      needsImages: analyzer.needsImages,\n      needsTables: analyzer.needsTables,\n      needsDocRouting: analyzer.needsDocRouting,\n      pipeline: 'deterministic-chains-v1'\n    }\n  }\n}];"
+      },
+      "id": "1b223ac8-9ba5-42e7-9beb-4a8e66aef0ef",
+      "name": "13. Format Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3296,
+        -32
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "1. Query Analyzer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "1. Query Analyzer": {
+      "main": [
+        [
+          {
+            "node": "2a. Is Greeting?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "2a. Is Greeting?": {
+      "main": [
+        [
+          {
+            "node": "Greeting Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "2b. Needs Doc Routing?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Greeting Response": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "2b. Needs Doc Routing?": {
+      "main": [
+        [
+          {
+            "node": "3. Document Router Chain",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "4b. Prepare Direct Search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "3. Document Router Chain": {
+      "main": [
+        [
+          {
+            "node": "4. Parse Router Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Router Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "3. Document Router Chain",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "4. Parse Router Output": {
+      "main": [
+        [
+          {
+            "node": "5. Hybrid Search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "4b. Prepare Direct Search": {
+      "main": [
+        [
+          {
+            "node": "5. Hybrid Search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "5. Hybrid Search": {
+      "main": [
+        [
+          {
+            "node": "6. Extract Chunk IDs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "6. Extract Chunk IDs": {
+      "main": [
+        [
+          {
+            "node": "7. Context Expansion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "7. Context Expansion": {
+      "main": [
+        [
+          {
+            "node": "8. Needs Images?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "8. Needs Images?": {
+      "main": [
+        [
+          {
+            "node": "9a. Retrieve Images",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "9b. Needs Tables?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "9a. Retrieve Images": {
+      "main": [
+        [
+          {
+            "node": "9b. Needs Tables?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "9b. Needs Tables?": {
+      "main": [
+        [
+          {
+            "node": "10a. Retrieve Tables",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "11. Merge Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "10a. Retrieve Tables": {
+      "main": [
+        [
+          {
+            "node": "11. Merge Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "11. Merge Results": {
+      "main": [
+        [
+          {
+            "node": "12. Answer Generator Chain",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "12. Answer Generator Chain": {
+      "main": [
+        [
+          {
+            "node": "13. Format Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Answer Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "12. Answer Generator Chain",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "13. Format Response": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {
+    "Webhook": [
+      {
+        "headers": {
+          "host": "rnocciolo.app.n8n.cloud",
+          "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+          "content-length": "147",
+          "accept": "*/*",
+          "accept-encoding": "gzip, br",
+          "accept-language": "en-US,en;q=0.9",
+          "cdn-loop": "cloudflare; loops=1; subreqs=1",
+          "cf-connecting-ip": "2601:8c:4b7f:a7d0:5820:fa82:debe:a473",
+          "cf-ew-via": "15",
+          "cf-ipcountry": "US",
+          "cf-ray": "99d79c0ed6abd123-EWR",
+          "cf-visitor": "{\"scheme\":\"https\"}",
+          "cf-worker": "n8n.cloud",
+          "content-type": "application/json",
+          "origin": "https://ame-techassist.com",
+          "priority": "u=1, i",
+          "referer": "https://ame-techassist.com/",
+          "sec-ch-ua": "\"Chromium\";v=\"142\", \"Google Chrome\";v=\"142\", \"Not_A Brand\";v=\"99\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"Windows\"",
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "cross-site",
+          "x-forwarded-for": "2601:8c:4b7f:a7d0:5820:fa82:debe:a473, 104.23.190.201",
+          "x-forwarded-host": "rnocciolo.app.n8n.cloud",
+          "x-forwarded-port": "443",
+          "x-forwarded-proto": "https",
+          "x-forwarded-server": "traefik-prod-users-gwc-13-6db466c7ff-ms98z",
+          "x-is-trusted": "yes",
+          "x-real-ip": "2601:8c:4b7f:a7d0:5820:fa82:debe:a473"
+        },
+        "params": {},
+        "query": {},
+        "body": {
+          "query": "Try again",
+          "context": {
+            "siteUrl": "https://ame-techassist.com",
+            "path": "/",
+            "topicId": null,
+            "user": {
+              "id": 1,
+              "username": "raymond",
+              "name": null
+            }
+          }
+        },
+        "webhookUrl": "https://rnocciolo.app.n8n.cloud/webhook/rag-chat",
+        "executionMode": "production"
+      }
+    ],
+    "1. Query Analyzer": [
+      {
+        "query": "Try again",
+        "queryType": "technical",
+        "needsDocRouting": true,
+        "needsImages": false,
+        "needsTables": false,
+        "doc_id": null,
+        "top_k": 20,
+        "fts_weight": 0.4,
+        "vector_weight": 0.6,
+        "user_id": "anonymous",
+        "username": "User"
+      }
+    ],
+    "2b. Needs Doc Routing?": [
+      {
+        "query": "Try again",
+        "queryType": "technical",
+        "needsDocRouting": true,
+        "needsImages": false,
+        "needsTables": false,
+        "doc_id": null,
+        "top_k": 20,
+        "fts_weight": 0.4,
+        "vector_weight": 0.6,
+        "user_id": "anonymous",
+        "username": "User"
+      }
+    ],
+    "3. Document Router Chain": [
+      {
+        "text": "{\n  \"doc_ids\": [\"error_handling_guide\", \"troubleshooting_manual\"],\n  \"enhanced_query\": \"retry operation error handling troubleshooting attempt\",\n  \"reasoning\": \"Information on retrying operations and handling errors is usually found in troubleshooting and error handling documentation.\"\n}"
+      }
+    ],
+    "4. Parse Router Output": [
+      {
+        "query": "Try again",
+        "doc_ids": [],
+        "top_k": 20,
+        "fts_weight": 0.4,
+        "vector_weight": 0.6,
+        "original_query": "Try again",
+        "routing_reasoning": "No routing performed"
+      }
+    ],
+    "5. Hybrid Search": [
+      {
+        "success": true,
+        "query": "Try again",
+        "doc_filter": null,
+        "total_results": 3,
+        "chunks": [
+          {
+            "id": "kitcontrol_manual_chunk_000014",
+            "doc_id": "kitcontrol_manual",
+            "content": "These components are not based on simple control points (ControlPoint) and do not support the addition of extensions: · HVAC components (except for LoopPoint, InterstartDelayControl and Tstat, which do support extensions) · Util components (except BooleanSwitch, EnumSwitch, MultiVibrator, NumericSwitch, StringSwitch, Ramp, Random, and SineWave, which do support extensions) You can quickly tell if a kitControl object can receive an extension by seeing if it has the frozen ProxyExt (proxy extension). To see this, expand the object in the kitControl palette, Nav tree or view the object's property sheet. If a Proxy Ext property is present, you can add other extensions (provided they are the correct type), for example a BooleanChangeOfValue history extension for a Logic-type object, and so forth. If you try to add an extension to a kitControl component that does not support extensions, you receive an illegal parent error message. NOTE: The frozen ProxyExt is the only use for the proxy extension in a kitControl object. Its value is always null. Only control points can be proxy points.",
+            "page_number": 12,
+            "section_id": "sec_0020",
+            "section_path": [
+              "About kitControl",
+              "Extensions and kitControl components"
+            ],
+            "metadata": {},
+            "score": 0.006557377049180328,
+            "match_type": "fts",
+            "_debug": {
+              "fts_rank": 1,
+              "vector_rank": null,
+              "fts_score": 0.006557377049180328,
+              "vector_score": 0
+            }
+          },
+          {
+            "id": "kitcontrol_manual_chunk_000031",
+            "doc_id": "kitcontrol_manual",
+            "content": "## Proportional-only control P-only control is just reset action, where loop output is directly proportional to the magnitude of the setpoint error (ES) and the size of the proportional gain (KP). P-only loop output is linear, and is calculated as follows: Output = (KP x ES) + bias (if action = direct) or Output = - ((KP x ES) + bias) (if action = reverse) If you are using proportional-only loop control, follow these guidelines: · Output limits: Define the Maximum Output and Minimum Output properties for the loop output, noting that the maximum value must be greater than the minimum. · Proportional Gain: Calculate and enter a proportionalConstant (KP) property value starting with this formula: [output range (maxOutput - minOutput)] / throttling range where throttling range is the corresponding result in the process variable. For example, for a temperature loop where a 0-to-100% loop output results in a 20 degree swing in the process variable, a starting point KP is: [(100% - 0%)/ 20deg.] = [(100% / 20deg.] = 5 When tuning the loop, you can try increasing this value (effectively using only a portion of the throttling range) to eliminate the amount of setpoint error. However, if you increase the KP too much, this typically results in a constant oscillation of the process variable (above and below the setpoint).",
+            "page_number": 23,
+            "section_id": "sec_0032",
+            "section_path": [
+              "Building management examples",
+              "PID loop configuration",
+              "Proportional-only control"
+            ],
+            "metadata": {},
+            "score": 0.0064516129032258064,
+            "match_type": "fts",
+            "_debug": {
+              "fts_rank": 2,
+              "vector_rank": null,
+              "fts_score": 0.0064516129032258064,
+              "vector_score": 0
+            }
+          },
+          {
+            "id": "kitcontrol_manual_chunk_000039",
+            "doc_id": "kitcontrol_manual",
+            "content": "## Proportional with Integral and Derivative (PID) control PID loop control can be difficult to tune and (often for this reason) is seldom used. However, in certain cases, PID control may be needed. An example is the control of a process with a long reaction time, such as temperature control of a large mass. For such a lag-oriented system, the derivative component of the PID loop output can help prevent overshoot that might otherwise result from PI control. The derivative gain (KD) exerts an anticipating braking effect on the loop output, based on the rate-of-change of the process. PID loop output is calculated as follows: Output = KP x (ES + KI x ErrorSum + KD x ((ES - LastES) / deltaT)) if action = direct) or Output = -(KP x [ES + KI x ErrorSum) + KD x ((ES - LastES) / deltaT))) (if action = reverse) ErrorSum = Sum of ES over time In the LoopPoint, the Derivative Constant property specifies the derivative gain (KD) directly in seconds (note this differs from some systems using derivative in minutes). If using PID control, follow the same PI configuration as for Proportional with Integral (PI) control, with the addition of defining a positive value as the Derivative Constant . In general, a Derivative Constant less than 10 seconds should be tried first, and only then increased (if necessary), providing that the loop output remains stable at steady-state conditions.",
+            "page_number": 25,
+            "section_id": "sec_0038",
+            "section_path": [
+              "Building management examples",
+              "PID loop configuration",
+              "Proportional with Integral and Derivative (PID) control"
+            ],
+            "metadata": {},
+            "score": 0.006349206349206349,
+            "match_type": "fts",
+            "_debug": {
+              "fts_rank": 3,
+              "vector_rank": null,
+              "fts_score": 0.006349206349206349,
+              "vector_score": 0
+            }
+          }
+        ],
+        "metadata": {
+          "fts_weight": 0.4,
+          "vector_weight": 0.6,
+          "fts_count": 3,
+          "vector_count": 0,
+          "documents_searched": "all"
+        }
+      }
+    ],
+    "6. Extract Chunk IDs": [
+      {
+        "chunk_ids": [
+          "kitcontrol_manual_chunk_000014",
+          "kitcontrol_manual_chunk_000031",
+          "kitcontrol_manual_chunk_000039"
+        ],
+        "doc_id": "kitcontrol_manual",
+        "chunks_count": 3,
+        "chunks_preview": [
+          {
+            "id": "kitcontrol_manual_chunk_000014",
+            "page": 12,
+            "preview": "These components are not based on simple control points (ControlPoint) and do not support the additi"
+          },
+          {
+            "id": "kitcontrol_manual_chunk_000031",
+            "page": 23,
+            "preview": "## Proportional-only control P-only control is just reset action, where loop output is directly prop"
+          },
+          {
+            "id": "kitcontrol_manual_chunk_000039",
+            "page": 25,
+            "preview": "## Proportional with Integral and Derivative (PID) control PID loop control can be difficult to tune"
+          }
+        ]
+      }
+    ],
+    "7. Context Expansion": [
+      {
+        "success": true,
+        "expanded_chunks": [
+          {
+            "id": "kitcontrol_manual_chunk_000013",
+            "doc_id": "kitcontrol_manual",
+            "content": "## Extensions and kitControl components You can add point extensions, such as alarm extension, history extension, or perhaps a control extension, to many kitControl components. Other kitControl components cannot receive extensions. These are some specific examples of kitControl components that support extensions: · Average object (Math folder): Inputs link to multiple proxy NumericPoints, each representing a room temperature. The Average object represents a Zone temperature (average). To this object you may add an alarm extension (OutOfRangeAlarmExt) and history extension (NumericInterval). · And object (Logic folder): Inputs link to multiple proxy BooleanPoints, each representing fan status (off or on). The And object links to downstream control logic. To track when all fans are running, you may add a history extension (BooleanChangeOfValue) and perhaps a control extension to collect runtime (DiscreteTotalizerExt). · NumericSwitch object (Util folder): Inputs link to two proxy NumericWritables, each representing a power rate (kW). The object output links to downstream control logic (and represents the current switched rate). To totalize this effective rate into energy accumulation, you can add a control extension (NumericTotalizerExt) and proper scaling to collect kWh.",
+            "page_number": 11,
+            "section_id": "sec_0020",
+            "section_path": [
+              "About kitControl",
+              "Extensions and kitControl components"
+            ],
+            "metadata": {},
+            "is_seed": false,
+            "expansion_type": "sibling"
+          },
+          {
+            "id": "kitcontrol_manual_chunk_000014",
+            "doc_id": "kitcontrol_manual",
+            "content": "These components are not based on simple control points (ControlPoint) and do not support the addition of extensions: · HVAC components (except for LoopPoint, InterstartDelayControl and Tstat, which do support extensions) · Util components (except BooleanSwitch, EnumSwitch, MultiVibrator, NumericSwitch, StringSwitch, Ramp, Random, and SineWave, which do support extensions) You can quickly tell if a kitControl object can receive an extension by seeing if it has the frozen ProxyExt (proxy extension). To see this, expand the object in the kitControl palette, Nav tree or view the object's property sheet. If a Proxy Ext property is present, you can add other extensions (provided they are the correct type), for example a BooleanChangeOfValue history extension for a Logic-type object, and so forth. If you try to add an extension to a kitControl component that does not support extensions, you receive an illegal parent error message. NOTE: The frozen ProxyExt is the only use for the proxy extension in a kitControl object. Its value is always null. Only control points can be proxy points.",
+            "page_number": 12,
+            "section_id": "sec_0020",
+            "section_path": [
+              "About kitControl",
+              "Extensions and kitControl components"
+            ],
+            "metadata": {},
+            "is_seed": true
+          },
+          {
+            "id": "kitcontrol_manual_chunk_000015",
+            "doc_id": "kitcontrol_manual",
+            "content": "The kitControl components facilitate the flexible modeling of building automation systems. This chapter provides practical examples to help you creatively construct an efficient model for your application.",
+            "page_number": 12,
+            "section_id": "sec_0020",
+            "section_path": [
+              "About kitControl",
+              "Extensions and kitControl components"
+            ],
+            "metadata": {},
+            "is_seed": false,
+            "expansion_type": "sibling"
+          },
+          {
+            "id": "kitcontrol_manual_chunk_000029",
+            "doc_id": "kitcontrol_manual",
+            "content": "## PID loop configuration The LoopPoint component implements a simple PID (Proportional, Integral, Derivative) control loop. The following terms are used when describing the operation of the LoopPoint component. · Process variable (PV): the controlled process, in other words, the value at the setpoint input, your starting point. · Setpoint (setpt): the target for the process variable. In other words, the value at the setpoint output, your goal. · Setpoint error(ES): the difference between the process variable and the setpoint acted upon by the loop algorithm. · Loop output: the correction signal produced by the loop algorithm. This value should be linked directly or indirectly to the NumericWritable component used to position a proportionally-modulated device, such as a valve or damper, that controls the process variable. · Proportional gain (KP): the value of the property Proportional Constant sets the overall gain of the loop as in this ratio: KP = Output range / affected process range (sometimes called throttling range) · Throttling range: the amount of process variable change expected as a result of throttling the system between the Minimum Output and Maximum Output . · Bias: the algorithm typically adds this value to the output to correct any offset error in proportional calculations and only as a control pivot output value for when PV = setpt.",
+            "page_number": 22,
+            "section_id": "sec_0031",
+            "section_path": [
+              "Building management examples",
+              "PID loop configuration"
+            ],
+            "metadata": {},
+            "is_seed": false,
+            "expansion_type": "parent"
+          },
+          {
+            "id": "kitcontrol_manual_chunk_000031",
+            "doc_id": "kitcontrol_manual",
+            "content": "## Proportional-only control P-only control is just reset action, where loop output is directly proportional to the magnitude of the setpoint error (ES) and the size of the proportional gain (KP). P-only loop output is linear, and is calculated as follows: Output = (KP x ES) + bias (if action = direct) or Output = - ((KP x ES) + bias) (if action = reverse) If you are using proportional-only loop control, follow these guidelines: · Output limits: Define the Maximum Output and Minimum Output properties for the loop output, noting that the maximum value must be greater than the minimum. · Proportional Gain: Calculate and enter a proportionalConstant (KP) property value starting with this formula: [output range (maxOutput - minOutput)] / throttling range where throttling range is the corresponding result in the process variable. For example, for a temperature loop where a 0-to-100% loop output results in a 20 degree swing in the process variable, a starting point KP is: [(100% - 0%)/ 20deg.] = [(100% / 20deg.] = 5 When tuning the loop, you can try increasing this value (effectively using only a portion of the throttling range) to eliminate the amount of setpoint error. However, if you increase the KP too much, this typically results in a constant oscillation of the process variable (above and below the setpoint).",
+            "page_number": 23,
+            "section_id": "sec_0032",
+            "section_path": [
+              "Building management examples",
+              "PID loop configuration",
+              "Proportional-only control"
+            ],
+            "metadata": {},
+            "is_seed": true
+          },
+          {
+            "id": "kitcontrol_manual_chunk_000030",
+            "doc_id": "kitcontrol_manual",
+            "content": "· Action: defines the direction of the output relative to any setpoint error, where: · Direct means that the loop output increases when PV increases. · Reverse means that the loop output increases with PV decreases. · Integral gain (KI): is the value of the property Integral Constant used to set or reset the gain of the loop expressed in repeats per minute. This value reacts to the duration of the setpoint error. · Derivative gain: is the value of the property Derivative Constant used to set the derivative or rate gain of the loop expressed in repeats per minute. This value reacts to the rate of change of the setpoint error providing a dampening effect.",
+            "page_number": 23,
+            "section_id": "sec_0031",
+            "section_path": [
+              "Building management examples",
+              "PID loop configuration"
+            ],
+            "metadata": {},
+            "is_seed": false,
+            "expansion_type": "parent"
+          },
+          {
+            "id": "kitcontrol_manual_chunk_000032",
+            "doc_id": "kitcontrol_manual",
+            "content": "· Bias: Assign the bias property an output-midpoint value (for example, 50.0). This allows for equal corrections for a process variable above or below setpoint. · Integral and Derivitive Gain: Set the properties integralConstant and derivativeConstant to 0.0 (the defaults).",
+            "page_number": 23,
+            "section_id": "sec_0032",
+            "section_path": [
+              "Building management examples",
+              "PID loop configuration",
+              "Proportional-only control"
+            ],
+            "metadata": {},
+            "is_seed": false,
+            "expansion_type": "sibling"
+          },
+          {
+            "id": "kitcontrol_manual_chunk_000039",
+            "doc_id": "kitcontrol_manual",
+            "content": "## Proportional with Integral and Derivative (PID) control PID loop control can be difficult to tune and (often for this reason) is seldom used. However, in certain cases, PID control may be needed. An example is the control of a process with a long reaction time, such as temperature control of a large mass. For such a lag-oriented system, the derivative component of the PID loop output can help prevent overshoot that might otherwise result from PI control. The derivative gain (KD) exerts an anticipating braking effect on the loop output, based on the rate-of-change of the process. PID loop output is calculated as follows: Output = KP x (ES + KI x ErrorSum + KD x ((ES - LastES) / deltaT)) if action = direct) or Output = -(KP x [ES + KI x ErrorSum) + KD x ((ES - LastES) / deltaT))) (if action = reverse) ErrorSum = Sum of ES over time In the LoopPoint, the Derivative Constant property specifies the derivative gain (KD) directly in seconds (note this differs from some systems using derivative in minutes). If using PID control, follow the same PI configuration as for Proportional with Integral (PI) control, with the addition of defining a positive value as the Derivative Constant . In general, a Derivative Constant less than 10 seconds should be tried first, and only then increased (if necessary), providing that the loop output remains stable at steady-state conditions.",
+            "page_number": 25,
+            "section_id": "sec_0038",
+            "section_path": [
+              "Building management examples",
+              "PID loop configuration",
+              "Proportional with Integral and Derivative (PID) control"
+            ],
+            "metadata": {},
+            "is_seed": true
+          },
+          {
+            "id": "kitcontrol_manual_chunk_000040",
+            "doc_id": "kitcontrol_manual",
+            "content": "Following is an example of a wire sheet for a loop point. Figure 9. Example LoopPoint in a wire sheet, linked to other components The following is the property sheet for the above example. Figure 10. Example LoopPoint property sheet",
+            "page_number": 25,
+            "section_id": "sec_0038",
+            "section_path": [
+              "Building management examples",
+              "PID loop configuration",
+              "Proportional with Integral and Derivative (PID) control"
+            ],
+            "metadata": {},
+            "is_seed": false,
+            "expansion_type": "sibling"
+          }
+        ],
+        "total_tokens": 1965,
+        "expansion_summary": {
+          "seed_chunks": 3,
+          "siblings_added": 4,
+          "parents_added": 2,
+          "children_added": 0,
+          "total_chunks": 9,
+          "token_budget": 6000,
+          "tokens_used": 1965,
+          "hierarchy_used": true,
+          "images_retrieved": 0,
+          "tables_retrieved": 0
+        }
+      }
+    ]
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "7b2e9978814c32d0a3b0dcfec6089a9e22b4a786bbecebb717124ee746c4c60c"
+  }
+}

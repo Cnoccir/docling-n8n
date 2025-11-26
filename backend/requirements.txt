@@ -1,0 +1,48 @@
+# FastAPI and server
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.6  # For file uploads
+websockets>=12.0
+
+# Celery and task queue
+celery>=5.3.4
+redis>=5.0.1
+flower>=2.0.1  # Worker monitoring UI
+
+# Database
+psycopg2-binary>=2.9.9
+pgvector>=0.2.4
+
+# OpenAI and embeddings
+openai>=1.12.0
+
+# Google Drive integration
+google-auth>=2.27.0
+google-api-python-client>=2.116.0
+
+# Image processing
+Pillow>=10.2.0
+boto3>=1.34.0  # S3 storage
+
+# Docling SDK and dependencies
+docling>=2.0.0
+docling-core>=2.0.0
+docling-ibm-models>=3.0.0
+docling-parse>=3.0.0
+pypdf>=4.0.0  # For PDF bookmark extraction
+
+# OCR engines (matching local setup)
+easyocr>=1.7.0
+pytesseract>=0.3.10
+
+# GPU acceleration
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Utilities
+python-dotenv>=1.0.0
+pydantic>=2.5.0
+aiofiles>=23.2.1  # Async file operations
+
+# Existing dependencies (from root requirements.txt)
+requests>=2.31.0

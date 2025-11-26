@@ -1,0 +1,40 @@
+# Core dependencies
+psycopg2-binary>=2.9.9
+openai>=1.12.0
+python-dotenv>=1.0.0
+
+# Image processing
+Pillow>=10.2.0
+boto3>=1.34.0
+
+# Vector database
+pgvector>=0.2.4
+
+# Docling SDK for native document processing
+docling>=2.0.0
+docling-core>=2.0.0
+
+# HTTP client (keeping for other potential uses)
+requests>=2.31.0
+
+# Data validation
+pydantic>=2.5.0
+
+# Web API
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+
+# Google Drive integration
+google-auth>=2.27.0
+google-auth-oauthlib>=1.2.0
+google-auth-httplib2>=0.2.0
+google-api-python-client>=2.114.0
+
+# YouTube video processing (NEW!)
+yt-dlp>=2024.3.10
+ffmpeg-python>=0.2.0
+
+# Note: ffmpeg binary must be installed separately
+# Windows: choco install ffmpeg
+# macOS: brew install ffmpeg
+# Linux: apt-get install ffmpeg

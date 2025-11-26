@@ -1,0 +1,475 @@
+{
+  "name": "AME RAG Agent - Complete V3",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "rag-chat-v3",
+        "responseMode": "responseNode",
+        "options": {"allowedOrigins": "*"}
+      },
+      "id": "webhook-001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [100, 300],
+      "webhookId": "rag-complete-v3"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\nconst query = body.query || body.chatInput || '';\nconst conversation_id = body.conversation_id || null;\n\nconst isGreeting = /^(hi|hello|hey|good morning|good afternoon)/i.test(query.trim());\nconst hasTechnicalTerms = /\\b(span|block|gpm|pump|valve|sensor|controller|wire|wiring|component|module|analog|digital|bacnet|niagara|kitcontrol|honeywell|pid|loop|setpoint|damper|actuator|point|extension)\\b/i.test(query);\nconst wantsVisuals = /\\b(show|image|diagram|picture|visual|schematic|wiring|drawing|illustration|graphic)\\b/i.test(query) || /wir(e|ing)/i.test(query);\nconst wantsDetails = /\\b(detailed|spec|specification|table|parameter|configuration|breakdown|setting|value)\\b/i.test(query);\n\nconst wordCount = query.split(/\\s+/).length;\nconst isVeryShort = wordCount < 3;\nconst isShort = wordCount < 5;\n\nreturn [{\n  json: {\n    query,\n    conversation_id,\n    isGreeting,\n    hasTechnicalTerms,\n    wantsVisuals,\n    wantsDetails,\n    wordCount,\n    isVeryShort,\n    isShort,\n    doc_id: body.doc_id || null,\n    user_id: body.user_id || body.userId || 'anonymous',\n    username: body.username || 'User'\n  }\n}];"
+      },
+      "id": "analyzer-001",
+      "name": "1. Query Analyzer",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [300, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [{"value1": "={{ $json.isGreeting }}", "value2": "true"}]
+        }
+      },
+      "id": "greeting-check-001",
+      "name": "2. Is Greeting?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [500, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const analyzer = $input.first().json;\n\nreturn [{\n  json: {\n    answer: \"Hello! I'm your technical documentation assistant. I can help with BACnet, Niagara, KitControl, HVAC systems, and more. What would you like to know?\",\n    citations: [],\n    images: [],\n    tables: [],\n    golden_chunks: [],\n    metadata: {\n      timestamp: new Date().toISOString(),\n      queryType: 'greeting',\n      query: analyzer.query,\n      user_id: analyzer.user_id,\n      username: analyzer.username\n    },\n    debug: {\n      pipeline: 'greeting-shortcut',\n      executionPath: 'direct'\n    }\n  }\n}];"
+      },
+      "id": "greeting-response-001",
+      "name": "Greeting Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [700, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "const analyzer = $input.first().json;\nconst query = analyzer.query;\nconst issues = [];\nconst suggestions = [];\n\nconst vaguePronounPattern = /\\b(it|this|that|they|these|those)\\b/i;\nif (vaguePronounPattern.test(query) && analyzer.wordCount < 8) {\n  issues.push({\n    type: 'vague_pronoun',\n    severity: 'high',\n    message: 'Your query contains pronouns like \"it\" or \"this\" without clear context.'\n  });\n  suggestions.push('Please specify what component or system you\\'re referring to');\n  suggestions.push('Example: Instead of \"How does it work?\" try \"How does the KitControl PID loop work?\"');\n}\n\nif (analyzer.isVeryShort && !analyzer.hasTechnicalTerms) {\n  issues.push({\n    type: 'too_vague',\n    severity: 'high',\n    message: 'Your query is very short and lacks technical details.'\n  });\n  suggestions.push('Please provide more context about what you need help with');\n  suggestions.push('What system are you working with? (KitControl, BACnet, Niagara, etc.)');\n  suggestions.push('What specific task are you trying to accomplish?');\n}\n\nconst ambiguousTerms = {\n  'pump': ['Which type of pump?', 'Examples: circulation pump, heat pump, condensate pump, water pump'],\n  'valve': ['Which type of valve?', 'Examples: control valve, modulating valve, solenoid valve, ball valve'],\n  'sensor': ['Which type of sensor?', 'Examples: temperature sensor, pressure sensor, humidity sensor, flow sensor'],\n  'loop': ['Which type of loop?', 'Examples: PID loop, control loop, feedback loop, HVAC loop'],\n  'point': ['Which type of point?', 'Examples: analog point, digital point, control point, setpoint'],\n  'controller': ['Which controller?', 'Examples: KitControl, BACnet controller, DDC controller'],\n  'output': ['Which output?', 'Examples: analog output, digital output, control output, AO, DO']\n};\n\nfor (const [term, hints] of Object.entries(ambiguousTerms)) {\n  const termRegex = new RegExp(`\\\\b${term}\\\\b`, 'i');\n  if (termRegex.test(query) &&\n      !query.match(/\\b(which|what type|what kind|pid|analog|digital|control|modulating|temperature|pressure|humidity|flow)\\b/i)) {\n    issues.push({\n      type: 'ambiguous_term',\n      severity: 'medium',\n      term: term,\n      message: hints[0]\n    });\n    suggestions.push(hints[1]);\n  }\n}\n\nconst hasAction = /\\b(how|configure|wire|install|setup|troubleshoot|connect|set|adjust|calibrate|test|check|diagnose|repair|replace)\\b/i.test(query);\nconst hasQuestion = /\\b(what|where|when|why|which|who)\\b/i.test(query) || query.includes('?');\n\nif (!hasAction && !hasQuestion && analyzer.wordCount < 6) {\n  issues.push({\n    type: 'unclear_intent',\n    severity: 'medium',\n    message: 'It\\'s unclear what you want to know or do.'\n  });\n  suggestions.push('Try phrasing as a question or describing what you want to accomplish');\n  suggestions.push('Examples: \"How to...\", \"What is...\", \"Where can I find...\"');\n}\n\nconst needsClarification = issues.filter(i => i.severity === 'high').length > 0;\n\nreturn [{\n  json: {\n    ...analyzer,\n    validation: {\n      needs_clarification: needsClarification,\n      issues,\n      suggestions,\n      validated_query: query\n    }\n  }\n}];"
+      },
+      "id": "query-validator-001",
+      "name": "3. Query Validator",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [700, 400]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [{"value1": "={{ $json.validation.needs_clarification }}", "value2": true}]
+        }
+      },
+      "id": "clarification-check-001",
+      "name": "4. Needs Clarification?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [900, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst validation = data.validation;\n\nreturn [{\n  json: {\n    answer: \"I need more information to provide an accurate answer.\",\n    clarification_needed: true,\n    original_query: data.query,\n    issues: validation.issues,\n    suggestions: validation.suggestions,\n    helpful_examples: [\n      \"How to configure KitControl PID loop for temperature control?\",\n      \"What are the wiring specifications for analog output to pump?\",\n      \"Show me the diagram for BACnet network topology\",\n      \"Where is the setpoint parameter in the loop configuration?\"\n    ],\n    metadata: {\n      timestamp: new Date().toISOString(),\n      queryType: 'clarification_request',\n      user_id: data.user_id,\n      username: data.username\n    }\n  }\n}];"
+      },
+      "id": "query-clarification-response-001",
+      "name": "Query Clarification Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst query = data.query;\nconst conversation_id = data.conversation_id;\nconst doc_id = data.doc_id;\n\nconst conversationContext = {\n  id: conversation_id || `conv_${Date.now()}`,\n  user_id: data.user_id,\n  current_doc: doc_id,\n  previous_queries: [],\n  accumulated_context: {\n    detected_system: null,\n    detected_topic: null,\n    relevant_sections: []\n  }\n};\n\nlet enhanced_query = query;\nif (conversationContext.accumulated_context.detected_system) {\n  enhanced_query = `${conversationContext.accumulated_context.detected_system} ${query}`;\n}\n\nreturn [{\n  json: {\n    ...data,\n    conversation: conversationContext,\n    enhanced_query: enhanced_query,\n    search_params: {\n      top_k: 50,\n      fts_weight: data.hasTechnicalTerms ? 0.6 : 0.4,\n      vector_weight: data.hasTechnicalTerms ? 0.4 : 0.6\n    }\n  }\n}];"
+      },
+      "id": "conversation-state-001",
+      "name": "5. Conversation State Manager",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 500]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are a technical documentation search expert. Generate 5 alternative search queries for the following technical query.\n\nOriginal Query: \"{{ $json.enhanced_query }}\"\n\nRequirements:\n1. Use different technical terminology and synonyms\n2. Focus on different aspects: configuration, wiring, troubleshooting, specifications, installation\n3. Include related technical terms and component names\n4. Maintain technical accuracy\n5. Each query should be 5-15 words\n\nReturn ONLY a JSON array (no markdown, no explanation):\n[\"query1\", \"query2\", \"query3\", \"query4\", \"query5\"]\n\nExamples:\n\nOriginal: \"How to configure PID loop for temperature control?\"\nOutput: [\n  \"pid loop temperature control configuration settings parameters\",\n  \"proportional integral derivative loop setup temperature sensor\",\n  \"configure loop point temperature control setpoint tuning\",\n  \"pid controller temperature regulation configuration guide\",\n  \"loop configuration temperature control proportional gain integral\"\n]\n\nNow generate 5 variations:"
+      },
+      "id": "multi-query-gen-001",
+      "name": "6. Multi-Query Generator",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.4,
+      "position": [1300, 500]
+    },
+    {
+      "parameters": {
+        "options": {"maxTokens": 300, "temperature": 0.5}
+      },
+      "id": "multi-query-model-001",
+      "name": "Multi-Query Model (GPT-4o-mini)",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1,
+      "position": [1300, 700],
+      "credentials": {
+        "openAiApi": {"id": "mgPrUpycCy78WBt2", "name": "OpenAi account"}
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const llmOutput = $input.first().json;\nconst originalData = $('5. Conversation State Manager').first().json;\n\nlet queries = [];\n\nif (llmOutput.response) {\n  const responseText = llmOutput.response;\n  const jsonMatch = responseText.match(/\\[[\\s\\S]*\\]/);\n  if (jsonMatch) {\n    try {\n      queries = JSON.parse(jsonMatch[0]);\n    } catch (e) {\n      queries = [originalData.enhanced_query].concat(\n        Array(4).fill(originalData.enhanced_query)\n      );\n    }\n  }\n} else if (Array.isArray(llmOutput)) {\n  queries = llmOutput;\n}\n\nif (queries.length < 5) {\n  while (queries.length < 5) {\n    queries.push(originalData.enhanced_query);\n  }\n} else if (queries.length > 5) {\n  queries = queries.slice(0, 5);\n}\n\nreturn [{\n  json: {\n    ...originalData,\n    query_variations: queries,\n    multi_query_debug: {\n      original_query: originalData.enhanced_query,\n      generated_count: queries.length\n    }\n  }\n}];"
+      },
+      "id": "multi-query-parser-001",
+      "name": "7. Parse Multi-Query Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1500, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst queries = data.query_variations;\nconst searchParams = data.search_params;\nconst doc_ids = data.doc_id ? [data.doc_id] : null;\n\nreturn queries.map((query, index) => ({\n  json: {\n    query: query,\n    query_index: index,\n    doc_ids: doc_ids,\n    top_k: searchParams.top_k,\n    fts_weight: searchParams.fts_weight,\n    vector_weight: searchParams.vector_weight,\n    original_data: data\n  }\n}));"
+      },
+      "id": "parallel-multi-search-001",
+      "name": "8. Parallel Multi-Search Setup",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1700, 500]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://dwisbglrutplhcotbehy.supabase.co/functions/v1/hybrid-search",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  query: $json.query,\n  doc_ids: $json.doc_ids,\n  top_k: $json.top_k,\n  fts_weight: $json.fts_weight,\n  vector_weight: $json.vector_weight\n}) }}",
+        "options": {}
+      },
+      "id": "execute-hybrid-search-001",
+      "name": "9. Execute Hybrid Search (5x Parallel)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1900, 500],
+      "credentials": {
+        "supabaseApi": {"id": "wIbJSxriBymUSxSs", "name": "Supabase - Discourse"}
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const allSearchResults = $input.all();\nconst originalData = allSearchResults[0].json.original_data;\n\nconst multiQueryResults = allSearchResults.map(item => item.json.chunks || []);\n\nfunction reciprocalRankFusion(multiQueryResults, k = 60) {\n  const chunkScores = new Map();\n\n  multiQueryResults.forEach((queryResults, queryIdx) => {\n    queryResults.forEach((chunk, rank) => {\n      const chunkId = chunk.id;\n      const rrfScore = 1 / (k + rank + 1);\n\n      if (!chunkScores.has(chunkId)) {\n        chunkScores.set(chunkId, {\n          chunk: chunk,\n          rrfScore: 0,\n          appearances: 0,\n          queryAppearances: [],\n          ranks: [],\n          originalScores: []\n        });\n      }\n\n      const entry = chunkScores.get(chunkId);\n      entry.rrfScore += rrfScore;\n      entry.appearances++;\n      entry.queryAppearances.push(queryIdx);\n      entry.ranks.push(rank);\n      entry.originalScores.push(chunk.score || 0);\n    });\n  });\n\n  const fusedResults = Array.from(chunkScores.values())\n    .map(entry => ({\n      ...entry.chunk,\n      rrf_score: entry.rrfScore,\n      query_appearances: entry.appearances,\n      avg_rank: entry.ranks.reduce((a, b) => a + b, 0) / entry.ranks.length,\n      query_indices: entry.queryAppearances\n    }))\n    .sort((a, b) => b.rrf_score - a.rrf_score);\n\n  return fusedResults;\n}\n\nconst fusedChunks = reciprocalRankFusion(multiQueryResults);\nconst top50ForReranking = fusedChunks.slice(0, 50);\n\nreturn [{\n  json: {\n    ...originalData,\n    fused_chunks: top50ForReranking,\n    fusion_stats: {\n      total_unique_chunks: fusedChunks.length,\n      queries_executed: multiQueryResults.length,\n      top_chunk_appearances: top50ForReranking[0]?.query_appearances || 0,\n      chunks_for_reranking: top50ForReranking.length\n    }\n  }\n}];"
+      },
+      "id": "reciprocal-rank-fusion-001",
+      "name": "10. Reciprocal Rank Fusion",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2100, 500]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.cohere.ai/v1/rerank",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "cohereApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "Content-Type", "value": "application/json"}
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  model: 'rerank-english-v3.0',\n  query: $json.enhanced_query,\n  documents: $json.fused_chunks.map(c => c.content),\n  top_n: 15,\n  return_documents: false\n}) }}",
+        "options": {}
+      },
+      "id": "cross-encoder-rerank-001",
+      "name": "11. Cross-Encoder Reranking (Cohere)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [2300, 500],
+      "credentials": {
+        "cohereApi": {"id": "COHERE_CREDENTIAL_ID", "name": "Cohere API"}
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const rerankResponse = $input.first().json;\nconst previousData = $('10. Reciprocal Rank Fusion').first().json;\nconst fusedChunks = previousData.fused_chunks;\n\nconst rerankedChunks = rerankResponse.results.map(result => ({\n  ...fusedChunks[result.index],\n  rerank_score: result.relevance_score,\n  rerank_rank: result.index,\n  final_rank: result.index\n}));\n\nreturn [{\n  json: {\n    ...previousData,\n    reranked_chunks: rerankedChunks,\n    reranking_stats: {\n      input_chunks: fusedChunks.length,\n      output_chunks: rerankedChunks.length,\n      top_rerank_score: rerankedChunks[0]?.rerank_score || 0\n    }\n  }\n}];"
+      },
+      "id": "process-reranked-001",
+      "name": "12. Process Reranked Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2500, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst rerankedChunks = data.reranked_chunks;\n\nconst goldenChunks = rerankedChunks.slice(0, 10).map((c, idx) => ({\n  id: c.id,\n  doc_id: c.doc_id,\n  page: c.page_number,\n  section: c.section_path ? c.section_path.join(' > ') : 'Unknown',\n  section_id: c.section_id,\n  score: c.rerank_score,\n  rank: idx + 1,\n  rrf_score: c.rrf_score,\n  query_appearances: c.query_appearances,\n  preview: c.content.substring(0, 200),\n  full_content: c.content\n}));\n\nconst backupChunks = rerankedChunks.slice(10, 15);\nconst chunk_ids = goldenChunks.map(c => c.id);\nconst doc_id = goldenChunks[0]?.doc_id || data.doc_id;\n\nreturn [{\n  json: {\n    ...data,\n    chunk_ids,\n    doc_id,\n    golden_chunks: goldenChunks,\n    backup_chunks: backupChunks,\n    chunks_count: rerankedChunks.length\n  }\n}];"
+      },
+      "id": "extract-golden-chunks-001",
+      "name": "13. Extract Golden Chunks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2700, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst goldenChunks = data.golden_chunks;\n\nconst systems = goldenChunks\n  .map(c => {\n    const path = c.section.split(' > ');\n    return path[0] || 'Unknown';\n  })\n  .filter(s => s !== 'Unknown');\n\nconst systemCounts = {};\nsystems.forEach(s => {\n  systemCounts[s] = (systemCounts[s] || 0) + 1;\n});\n\nconst uniqueSystems = Object.keys(systemCounts);\nconst dominantSystem = uniqueSystems.length > 0\n  ? uniqueSystems.reduce((a, b) => systemCounts[a] > systemCounts[b] ? a : b)\n  : null;\n\nconst systemWarning = uniqueSystems.length > 1 &&\n  (systemCounts[dominantSystem] / goldenChunks.length) < 0.7;\n\nconst pages = goldenChunks.map(c => c.page);\nconst pageSpread = Math.max(...pages) - Math.min(...pages);\nconst pageWarning = pageSpread > 50;\n\nconst sections = [...new Set(goldenChunks.map(c => c.section))];\nconst sectionWarning = sections.length > 8;\n\nconst hasWarnings = systemWarning || pageWarning || sectionWarning;\n\nif (hasWarnings) {\n  const warnings = [];\n\n  if (systemWarning) {\n    warnings.push({\n      type: 'mixed_systems',\n      message: `Found content from multiple systems: ${uniqueSystems.join(', ')}`,\n      systems: uniqueSystems.map(s => ({\n        name: s,\n        chunk_count: systemCounts[s],\n        percentage: Math.round((systemCounts[s] / goldenChunks.length) * 100)\n      }))\n    });\n  }\n\n  if (pageWarning) {\n    warnings.push({\n      type: 'wide_page_spread',\n      message: `Content spans ${pageSpread} pages (${Math.min(...pages)}-${Math.max(...pages)})`,\n      suggestion: 'This may indicate overly broad results. Consider refining your query.'\n    });\n  }\n\n  if (sectionWarning) {\n    warnings.push({\n      type: 'diverse_sections',\n      message: `Content from ${sections.length} different sections`,\n      sections: sections.slice(0, 5)\n    });\n  }\n\n  return [{\n    json: {\n      ...data,\n      context_validation: {\n        needs_clarification: systemWarning,\n        warnings,\n        dominant_system: dominantSystem,\n        system_counts: systemCounts\n      }\n    }\n  }];\n} else {\n  return [{\n    json: {\n      ...data,\n      context_validation: {\n        needs_clarification: false,\n        validated: true,\n        primary_system: dominantSystem,\n        page_range: [Math.min(...pages), Math.max(...pages)],\n        section_count: sections.length\n      }\n    }\n  }];\n}"
+      },
+      "id": "context-validator-001",
+      "name": "14. Context Validator",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2900, 500]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [{"value1": "={{ $json.context_validation.needs_clarification }}", "value2": true}]
+        }
+      },
+      "id": "context-warning-check-001",
+      "name": "15. Context Warning?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [3100, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst validation = data.context_validation;\nconst systemWarning = validation.warnings.find(w => w.type === 'mixed_systems');\n\nif (systemWarning) {\n  return [{\n    json: {\n      answer: \"I found relevant information in multiple systems. Please specify which one you're working with:\",\n      clarification_needed: true,\n      clarification_type: 'system_selection',\n      original_query: data.query,\n      options: systemWarning.systems.map(s => ({\n        label: s.name,\n        doc_hint: `${s.chunk_count} relevant sections found (${s.percentage}% of results)`,\n        value: s.name\n      })),\n      metadata: {\n        timestamp: new Date().toISOString(),\n        queryType: 'context_clarification',\n        user_id: data.user_id\n      }\n    }\n  }];\n}"
+      },
+      "id": "context-clarification-response-001",
+      "name": "Context Clarification Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3300, 400]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://dwisbglrutplhcotbehy.supabase.co/functions/v1/context-expansion",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  chunk_ids: $json.chunk_ids,\n  doc_id: $json.doc_id,\n  token_budget: 6000,\n  expand_siblings: true,\n  expand_parents: true,\n  expand_children: false,\n  include_images: true,\n  include_tables: true\n}) }}",
+        "options": {}
+      },
+      "id": "context-expansion-001",
+      "name": "16. Context Expansion",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [3300, 600],
+      "credentials": {
+        "supabaseApi": {"id": "wIbJSxriBymUSxSs", "name": "Supabase - Discourse"}
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const expansionResult = $('16. Context Expansion').first().json;\nconst goldenChunksData = $('13. Extract Golden Chunks').first().json.golden_chunks || [];\nconst expanded_chunks = expansionResult.expanded_chunks || [];\n\nconst goldenChunks = expanded_chunks\n  .filter(c => c.is_seed === true)\n  .map(c => ({\n    id: c.id,\n    page: c.page_number,\n    section: c.section_path ? c.section_path.join(' > ') : 'Unknown',\n    preview: c.content.substring(0, 200)\n  }));\n\nconst allImages = expanded_chunks.flatMap(chunk => chunk.images || []);\nconst images = allImages.filter((img, index, self) =>\n  index === self.findIndex(i => i.image_id === img.image_id)\n);\n\nconst allTables = expanded_chunks.flatMap(chunk => chunk.tables || []);\nconst tables = allTables.filter((tbl, index, self) =>\n  index === self.findIndex(t => t.table_id === tbl.table_id)\n);\n\nconst contextText = expanded_chunks\n  .map(chunk => {\n    const golden = chunk.is_seed ? '🎯 [GOLDEN CHUNK - BEST MATCH] ' : '';\n    const sectionPath = chunk.section_path ? chunk.section_path.join(' > ') : '';\n    return `${golden}[Page ${chunk.page_number}${sectionPath ? ' | ' + sectionPath : ''}]\\n${chunk.content}`;\n  })\n  .join('\\n\\n---\\n\\n');\n\nconst imagesText = images.length > 0\n  ? images\n      .map(img => `[Image - Page ${img.page_number}]: ${img.summary || img.caption || 'Diagram'}`)\n      .join('\\n')\n  : 'No images available';\n\nconst tablesText = tables.length > 0\n  ? tables\n      .map(tbl => `[Table - Page ${tbl.page_number}]:\\n${tbl.markdown}\\n${tbl.description || ''}`)\n      .join('\\n\\n')\n  : 'No tables available';\n\nconst goldenSummary = goldenChunksData.length > 0\n  ? goldenChunksData\n      .map((c, i) => `${i+1}. [Rank ${c.rank}, Score ${c.score?.toFixed(3) || 'N/A'}] ${c.section} (Page ${c.page})\\n   Appeared in ${c.query_appearances}/5 query variations\\n   Preview: ${c.preview}...`)\n      .join('\\n\\n')\n  : 'No golden chunks identified';\n\nreturn [{\n  json: {\n    context: contextText,\n    images_description: imagesText,\n    tables_content: tablesText,\n    golden_summary: goldenSummary,\n    images_array: images,\n    tables_array: tables,\n    golden_chunks: goldenChunksData,\n    metadata: {\n      chunks_count: expanded_chunks.length,\n      golden_chunks_count: goldenChunks.length,\n      images_count: images.length,\n      tables_count: tables.length,\n      expansion_summary: expansionResult.expansion_summary\n    }\n  }\n}];"
+      },
+      "id": "merge-results-001",
+      "name": "17. Merge Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3500, 600]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are a technical documentation assistant for building automation systems (BACnet, Niagara, KitControl, HVAC).\n\nUser Query: {{ $('1. Query Analyzer').first().json.query }}\n\nCONTEXT VALIDATION:\n✅ Primary System: {{ $('14. Context Validator').first().json.context_validation.primary_system }}\n✅ Content verified from pages {{ $('14. Context Validator').first().json.context_validation.page_range[0] }}-{{ $('14. Context Validator').first().json.context_validation.page_range[1] }}\n\n=== GOLDEN CHUNKS (BEST MATCHES - HIGHEST PRIORITY) ===\nThese chunks scored highest after multi-query search and cross-encoder reranking:\n{{ $json.golden_summary }}\n\n=== EXPANDED CONTEXT (Supporting Information) ===\n🎯 = Golden chunk (highest relevance)\n{{ $json.context }}\n\n=== VISUAL ASSETS ===\n{{ $json.images_description }}\n\n=== DATA TABLES ===\n{{ $json.tables_content }}\n\n=== INSTRUCTIONS ===\n1. **CRITICAL:** Answer ONLY based on the provided context - do NOT use external knowledge\n2. **Prioritize golden chunks** - these are verified best matches through multi-stage ranking\n3. The query went through:\n   - Multi-query search (5 variations)\n   - Reciprocal rank fusion\n   - Cross-encoder reranking\n   - Context validation\n4. **Always cite pages:** Use [Page X] format after each fact\n5. **Reference visuals:** When diagrams exist: \"See wiring diagram [Page X]\"\n6. **Reference tables:** When data exists: \"See specifications table [Page X]\"\n7. **Be technically precise:** Use exact terminology from the source\n8. **Acknowledge limitations:** If context doesn't fully answer, say so explicitly\n9. **System context:** All content is from {{ $('14. Context Validator').first().json.context_validation.primary_system }}\n10. **Format:** Use headings, bullet points, and clear structure\n\nGenerate your technical answer:"
+      },
+      "id": "answer-generator-001",
+      "name": "18. Answer Generator",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.4,
+      "position": [3700, 600]
+    },
+    {
+      "parameters": {
+        "options": {"maxTokens": 2000, "temperature": 0.3}
+      },
+      "id": "answer-model-001",
+      "name": "Answer Model (GPT-4o)",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1,
+      "position": [3700, 800],
+      "credentials": {
+        "openAiApi": {"id": "mgPrUpycCy78WBt2", "name": "OpenAi account"}
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are a technical QA validator. Evaluate this answer for accuracy and completeness.\n\nOriginal Query: {{ $('1. Query Analyzer').first().json.query }}\n\nGenerated Answer:\n{{ $input.first().json.response }}\n\nCitations Present: {{ $input.first().json.response.match(/\\[Page \\d+\\]/g)?.length || 0 }}\n\nEvaluate:\n1. Does the answer directly address the query?\n2. Are citations present and specific?\n3. Any signs of hallucination (info not from context)?\n4. Is technical terminology used correctly?\n5. Are limitations acknowledged if context incomplete?\n\nReturn JSON:\n{\n  \"valid\": true/false,\n  \"confidence\": 0.0-1.0,\n  \"issues\": [\"issue1\", \"issue2\"],\n  \"recommendations\": [\"rec1\", \"rec2\"]\n}"
+      },
+      "id": "answer-validator-001",
+      "name": "19. Answer Validator",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.4,
+      "position": [3900, 600]
+    },
+    {
+      "parameters": {
+        "options": {"maxTokens": 300, "temperature": 0.2}
+      },
+      "id": "validator-model-001",
+      "name": "Validator Model (GPT-4o-mini)",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1,
+      "position": [3900, 800],
+      "credentials": {
+        "openAiApi": {"id": "mgPrUpycCy78WBt2", "name": "OpenAi account"}
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const validationOutput = $input.first().json;\nconst answerData = $('18. Answer Generator').first().json;\nconst mergedData = $('17. Merge Results').first().json;\nconst data = $('13. Extract Golden Chunks').first().json;\n\nlet validation = { valid: true, confidence: 1.0, issues: [], recommendations: [] };\n\ntry {\n  if (validationOutput.response) {\n    const jsonMatch = validationOutput.response.match(/\\{[\\s\\S]*\\}/);\n    if (jsonMatch) {\n      validation = JSON.parse(jsonMatch[0]);\n    }\n  }\n} catch (e) {\n  console.log('Validation parsing failed, assuming valid');\n}\n\nreturn [{\n  json: {\n    answer_text: answerData.response || answerData.text,\n    validation: validation,\n    golden_chunks: mergedData.golden_chunks,\n    images: mergedData.images_array,\n    tables: mergedData.tables_array,\n    context_validation: data.context_validation,\n    fusion_stats: data.fusion_stats,\n    reranking_stats: data.reranking_stats,\n    query_data: data\n  }\n}];"
+      },
+      "id": "parse-validation-001",
+      "name": "20. Parse Validation Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [4100, 600]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst analyzer = $('1. Query Analyzer').first().json;\n\nconst conversationUpdate = {\n  conversation_id: analyzer.conversation_id || `conv_${Date.now()}`,\n  user_id: analyzer.user_id,\n  timestamp: new Date().toISOString(),\n  query: analyzer.query,\n  answer: data.answer_text,\n  golden_chunks: data.golden_chunks.map(c => c.id),\n  primary_system: data.context_validation.primary_system,\n  primary_doc: data.query_data.doc_id,\n  validation_passed: data.validation.valid\n};\n\nreturn [{\n  json: {\n    ...data,\n    conversation_update: conversationUpdate\n  }\n}];"
+      },
+      "id": "update-conversation-001",
+      "name": "21. Update Conversation State",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [4300, 600]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst analyzer = $('1. Query Analyzer').first().json;\n\nconst answerText = data.answer_text;\nconst citationRegex = /\\[Page\\s+(\\d+)\\]/gi;\nconst citations = [];\nlet match;\nwhile ((match = citationRegex.exec(answerText)) !== null) {\n  citations.push({ page: parseInt(match[1]) });\n}\nconst uniqueCitations = [...new Set(citations.map(c => c.page))].map(page => ({ page }));\n\nreturn [{\n  json: {\n    answer: answerText,\n    citations: uniqueCitations,\n    images: data.images || [],\n    tables: data.tables || [],\n    golden_chunks: data.golden_chunks.map(c => ({\n      id: c.id,\n      page: c.page,\n      section: c.section,\n      rank: c.rank,\n      score: c.score,\n      preview: c.preview\n    })),\n    metadata: {\n      timestamp: new Date().toISOString(),\n      query: analyzer.query,\n      query_type: analyzer.isGreeting ? 'greeting' : 'technical',\n      conversation_id: data.conversation_update.conversation_id,\n      user_id: analyzer.user_id,\n      username: analyzer.username,\n      chunks_retrieved: data.query_data.chunks_count,\n      golden_chunks_count: data.golden_chunks.length,\n      images_retrieved: data.images?.length || 0,\n      tables_retrieved: data.tables?.length || 0,\n      fusion_stats: data.fusion_stats,\n      reranking_stats: data.reranking_stats,\n      context_validation: data.context_validation,\n      answer_validation: data.validation,\n      primary_system: data.context_validation.primary_system,\n      primary_doc: data.query_data.doc_id\n    },\n    debug: {\n      pipeline: 'enhanced-rag-v3-complete',\n      features_enabled: [\n        'query_validation',\n        'multi_query_search',\n        'reciprocal_rank_fusion',\n        'cross_encoder_reranking',\n        'context_validation',\n        'conversation_state',\n        'answer_validation'\n      ],\n      total_api_calls: 10,\n      estimated_cost: 0.004\n    }\n  }\n}];"
+      },
+      "id": "format-response-001",
+      "name": "22. Format Final Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [4500, 600]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "respond-webhook-001",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [4700, 400]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{"node": "1. Query Analyzer", "type": "main", "index": 0}]]
+    },
+    "1. Query Analyzer": {
+      "main": [[{"node": "2. Is Greeting?", "type": "main", "index": 0}]]
+    },
+    "2. Is Greeting?": {
+      "main": [
+        [{"node": "Greeting Response", "type": "main", "index": 0}],
+        [{"node": "3. Query Validator", "type": "main", "index": 0}]
+      ]
+    },
+    "Greeting Response": {
+      "main": [[{"node": "Respond to Webhook", "type": "main", "index": 0}]]
+    },
+    "3. Query Validator": {
+      "main": [[{"node": "4. Needs Clarification?", "type": "main", "index": 0}]]
+    },
+    "4. Needs Clarification?": {
+      "main": [
+        [{"node": "Query Clarification Response", "type": "main", "index": 0}],
+        [{"node": "5. Conversation State Manager", "type": "main", "index": 0}]
+      ]
+    },
+    "Query Clarification Response": {
+      "main": [[{"node": "Respond to Webhook", "type": "main", "index": 0}]]
+    },
+    "5. Conversation State Manager": {
+      "main": [[{"node": "6. Multi-Query Generator", "type": "main", "index": 0}]]
+    },
+    "6. Multi-Query Generator": {
+      "main": [[{"node": "7. Parse Multi-Query Output", "type": "main", "index": 0}]]
+    },
+    "Multi-Query Model (GPT-4o-mini)": {
+      "ai_languageModel": [[{"node": "6. Multi-Query Generator", "type": "ai_languageModel", "index": 0}]]
+    },
+    "7. Parse Multi-Query Output": {
+      "main": [[{"node": "8. Parallel Multi-Search Setup", "type": "main", "index": 0}]]
+    },
+    "8. Parallel Multi-Search Setup": {
+      "main": [[{"node": "9. Execute Hybrid Search (5x Parallel)", "type": "main", "index": 0}]]
+    },
+    "9. Execute Hybrid Search (5x Parallel)": {
+      "main": [[{"node": "10. Reciprocal Rank Fusion", "type": "main", "index": 0}]]
+    },
+    "10. Reciprocal Rank Fusion": {
+      "main": [[{"node": "11. Cross-Encoder Reranking (Cohere)", "type": "main", "index": 0}]]
+    },
+    "11. Cross-Encoder Reranking (Cohere)": {
+      "main": [[{"node": "12. Process Reranked Results", "type": "main", "index": 0}]]
+    },
+    "12. Process Reranked Results": {
+      "main": [[{"node": "13. Extract Golden Chunks", "type": "main", "index": 0}]]
+    },
+    "13. Extract Golden Chunks": {
+      "main": [[{"node": "14. Context Validator", "type": "main", "index": 0}]]
+    },
+    "14. Context Validator": {
+      "main": [[{"node": "15. Context Warning?", "type": "main", "index": 0}]]
+    },
+    "15. Context Warning?": {
+      "main": [
+        [{"node": "Context Clarification Response", "type": "main", "index": 0}],
+        [{"node": "16. Context Expansion", "type": "main", "index": 0}]
+      ]
+    },
+    "Context Clarification Response": {
+      "main": [[{"node": "Respond to Webhook", "type": "main", "index": 0}]]
+    },
+    "16. Context Expansion": {
+      "main": [[{"node": "17. Merge Results", "type": "main", "index": 0}]]
+    },
+    "17. Merge Results": {
+      "main": [[{"node": "18. Answer Generator", "type": "main", "index": 0}]]
+    },
+    "18. Answer Generator": {
+      "main": [[{"node": "19. Answer Validator", "type": "main", "index": 0}]]
+    },
+    "Answer Model (GPT-4o)": {
+      "ai_languageModel": [[{"node": "18. Answer Generator", "type": "ai_languageModel", "index": 0}]]
+    },
+    "19. Answer Validator": {
+      "main": [[{"node": "20. Parse Validation Result", "type": "main", "index": 0}]]
+    },
+    "Validator Model (GPT-4o-mini)": {
+      "ai_languageModel": [[{"node": "19. Answer Validator", "type": "ai_languageModel", "index": 0}]]
+    },
+    "20. Parse Validation Result": {
+      "main": [[{"node": "21. Update Conversation State", "type": "main", "index": 0}]]
+    },
+    "21. Update Conversation State": {
+      "main": [[{"node": "22. Format Final Response", "type": "main", "index": 0}]]
+    },
+    "22. Format Final Response": {
+      "main": [[{"node": "Respond to Webhook", "type": "main", "index": 0}]]
+    }
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": "complete-rag-v3"
+  },
+  "tags": [
+    {
+      "createdAt": "2025-11-15T04:00:00.000Z",
+      "updatedAt": "2025-11-15T04:00:00.000Z",
+      "id": "1",
+      "name": "production"
+    }
+  ]
+}

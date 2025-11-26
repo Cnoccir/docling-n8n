@@ -1,0 +1,248 @@
+{
+  "name": "AME RAG - Smart Router (Intent-Based)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "rag-smart",
+        "responseMode": "responseNode",
+        "options": {"allowedOrigins": "*"}
+      },
+      "id": "webhook-001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [100, 400],
+      "webhookId": "rag-smart-router"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\nconst query = (body.query || body.chatInput || '').toLowerCase().trim();\nconst user_id = body.user_id || body.userId || 'anonymous';\n\n// FAST VALIDATION\nif (!query || query.length === 0) {\n  return [{\n    json: {\n      intent: 'error',\n      error_type: 'empty_query',\n      answer: 'Please provide a query.',\n      user_id,\n      timestamp: new Date().toISOString()\n    }\n  }];\n}\n\n// INTENT DETECTION\nconst intents = {\n  greeting: /^(hi|hello|hey|good morning|good afternoon|good evening|greetings)/i,\n  list_documents: /\\b(list|show|get|display|what)\\b.*\\b(documents?|files?|pdfs?|manuals?)\\b/i,\n  document_info: /\\b(info|information|details|metadata|about)\\b.*\\b(document|file)\\b/i,\n  search_content: /\\b(how|what|where|why|configure|setup|wire|install|troubleshoot|explain|find|search)\\b/i,\n  get_images: /\\b(show|get|display|find)\\b.*\\b(image|diagram|picture|schematic|wiring|visual)s?\\b/i,\n  get_tables: /\\b(show|get|display|find)\\b.*\\b(table|data|specification|parameter)s?\\b/i\n};\n\nlet detectedIntent = 'search_content'; // Default\n\nif (intents.greeting.test(query)) {\n  detectedIntent = 'greeting';\n} else if (intents.list_documents.test(query)) {\n  detectedIntent = 'list_documents';\n} else if (intents.document_info.test(query)) {\n  detectedIntent = 'document_info';\n} else if (intents.get_images.test(query)) {\n  detectedIntent = 'get_images';\n} else if (intents.get_tables.test(query)) {\n  detectedIntent = 'get_tables';\n} else if (intents.search_content.test(query)) {\n  detectedIntent = 'search_content';\n}\n\nreturn [{\n  json: {\n    intent: detectedIntent,\n    query: body.query || body.chatInput || '',\n    original_query: query,\n    user_id,\n    username: body.username || 'User',\n    doc_id: body.doc_id || null,\n    conversation_id: body.conversation_id || null,\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "intent-detector-001",
+      "name": "1. Intent Detector",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [300, 400]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {"value1": "={{ $json.intent }}", "operation": "equals", "value2": "greeting"}
+          ]
+        }
+      },
+      "id": "router-001",
+      "name": "2. Route by Intent",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [500, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\n\nreturn [{\n  json: {\n    answer: \"Hello! I'm your technical documentation assistant. I can help you:\\n\\n- List available documents\\n- Search for specific technical information\\n- Find diagrams and schematics\\n- Get specifications and parameters\\n\\nWhat would you like to do?\",\n    intent: 'greeting',\n    metadata: {\n      timestamp: new Date().toISOString(),\n      user_id: data.user_id,\n      api_calls: 0,\n      cost: 0\n    }\n  }\n}];"
+      },
+      "id": "greeting-response-001",
+      "name": "Greeting Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [700, 200]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT * FROM list_documents(\n  NULL,\n  NULL,\n  {{ $json.limit || 50 }},\n  {{ $json.offset || 0 }}\n)"
+      },
+      "id": "list-docs-rpc-001",
+      "name": "3. List Documents (RPC)",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [700, 300],
+      "credentials": {
+        "supabaseApi": {"id": "wIbJSxriBymUSxSs", "name": "Supabase - Discourse"}
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst data = $('1. Intent Detector').first().json;\n\nif (items.length === 0 || !items[0].json) {\n  return [{\n    json: {\n      answer: \"No documents found in the system.\",\n      documents: [],\n      total: 0,\n      intent: 'list_documents',\n      metadata: {\n        timestamp: new Date().toISOString(),\n        user_id: data.user_id\n      }\n    }\n  }];\n}\n\nconst documents = items.map(item => item.json);\n\nconst answer = `I found ${documents.length} document${documents.length !== 1 ? 's' : ''}:\\n\\n` +\n  documents.map((doc, idx) => \n    `${idx + 1}. **${doc.title}**\\n` +\n    `   - File: ${doc.filename}\\n` +\n    `   - Status: ${doc.status}\\n` +\n    `   - Pages: ${doc.total_pages || 'N/A'}\\n` +\n    `   - Chunks: ${doc.total_chunks || 0}\\n` +\n    `   - Processed: ${doc.processed_at ? new Date(doc.processed_at).toLocaleDateString() : 'In progress'}\\n`\n  ).join('\\n');\n\nreturn [{\n  json: {\n    answer,\n    documents,\n    total: documents.length,\n    intent: 'list_documents',\n    metadata: {\n      timestamp: new Date().toISOString(),\n      user_id: data.user_id,\n      api_calls: 1,\n      cost: 0\n    }\n  }\n}];"
+      },
+      "id": "format-doc-list-001",
+      "name": "4. Format Document List",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT * FROM get_document_details('{{ $json.doc_id }}')"
+      },
+      "id": "get-doc-details-rpc-001",
+      "name": "5. Get Document Details (RPC)",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [700, 400],
+      "credentials": {
+        "supabaseApi": {"id": "wIbJSxriBymUSxSs", "name": "Supabase - Discourse"}
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const doc = $input.first().json;\nconst data = $('1. Intent Detector').first().json;\n\nif (!doc || !doc.id) {\n  return [{\n    json: {\n      answer: \"Document not found. Please provide a valid document ID.\",\n      intent: 'document_info',\n      metadata: {\n        timestamp: new Date().toISOString(),\n        user_id: data.user_id\n      }\n    }\n  }];\n}\n\nconst answer = `**${doc.title}**\\n\\n` +\n  `**File:** ${doc.filename}\\n` +\n  `**Status:** ${doc.status}\\n` +\n  `**Type:** ${doc.document_type || 'Unknown'}\\n` +\n  `**Summary:** ${doc.summary || 'No summary available'}\\n\\n` +\n  `**Statistics:**\\n` +\n  `- Pages: ${doc.total_pages || 0}\\n` +\n  `- Text Chunks: ${doc.total_chunks || 0}\\n` +\n  `- Sections: ${doc.total_sections || 0}\\n` +\n  `- Images: ${doc.total_images || 0}\\n` +\n  `- Tables: ${doc.total_tables || 0}\\n\\n` +\n  `**Processing:**\\n` +\n  `- Created: ${doc.created_at ? new Date(doc.created_at).toLocaleString() : 'Unknown'}\\n` +\n  `- Processed: ${doc.processed_at ? new Date(doc.processed_at).toLocaleString() : 'Not yet'}\\n` +\n  `- Duration: ${doc.processing_duration_seconds ? (doc.processing_duration_seconds / 60).toFixed(2) + ' minutes' : 'N/A'}\\n` +\n  `- Cost: $${doc.ingestion_cost_usd || 0}\\n` +\n  `- Tokens: ${doc.tokens_used?.toLocaleString() || 0}\\n\\n` +\n  (doc.tags && doc.tags.length > 0 ? `**Tags:** ${doc.tags.join(', ')}\\n` : '') +\n  (doc.categories && doc.categories.length > 0 ? `**Categories:** ${doc.categories.join(', ')}` : '');\n\nreturn [{\n  json: {\n    answer,\n    document: doc,\n    intent: 'document_info',\n    metadata: {\n      timestamp: new Date().toISOString(),\n      user_id: data.user_id,\n      api_calls: 1,\n      cost: 0\n    }\n  }\n}];"
+      },
+      "id": "format-doc-info-001",
+      "name": "6. Format Document Info",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 400]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://dwisbglrutplhcotbehy.supabase.co/functions/v1/hybrid-search",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\n  \"query\": $json.query,\n  \"doc_id\": $json.doc_id,\n  \"top_k\": 10,\n  \"fts_weight\": 0.5,\n  \"vector_weight\": 0.5\n} }}",
+        "options": {}
+      },
+      "id": "hybrid-search-001",
+      "name": "7. Hybrid Search (Edge Function)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [700, 500],
+      "credentials": {
+        "supabaseApi": {"id": "wIbJSxriBymUSxSs", "name": "Supabase - Discourse"}
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const searchResult = $input.first().json;\nconst data = $('1. Intent Detector').first().json;\n\nif (!searchResult.chunks || searchResult.chunks.length === 0) {\n  return [{\n    json: {\n      answer: \"I couldn't find any relevant information for your query. Try rephrasing or check if you're searching in the correct document.\",\n      chunks: [],\n      intent: 'search_content',\n      metadata: {\n        timestamp: new Date().toISOString(),\n        user_id: data.user_id,\n        api_calls: 1\n      }\n    }\n  }];\n}\n\nconst chunks = searchResult.chunks.slice(0, 5);\n\nconst answer = `Found ${searchResult.chunks.length} relevant results. Here are the top matches:\\n\\n` +\n  chunks.map((chunk, idx) => \n    `**${idx + 1}. [Page ${chunk.page_number}] ${chunk.section_path ? chunk.section_path.join(' > ') : 'Unknown Section'}**\\n` +\n    `${chunk.content.substring(0, 200)}...\\n` +\n    `_Score: ${chunk.score ? chunk.score.toFixed(3) : 'N/A'}_\\n`\n  ).join('\\n');\n\nreturn [{\n  json: {\n    answer,\n    chunks: searchResult.chunks,\n    total_found: searchResult.chunks.length,\n    intent: 'search_content',\n    metadata: {\n      timestamp: new Date().toISOString(),\n      user_id: data.user_id,\n      api_calls: 2,\n      cost: 0.0001\n    }\n  }\n}];"
+      },
+      "id": "format-search-results-001",
+      "name": "8. Format Search Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 500]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT i.*, d.title as doc_title\nFROM images i\nJOIN document_index d ON i.doc_id = d.id\nWHERE (i.caption ILIKE '%{{ $json.query }}%' OR i.basic_summary ILIKE '%{{ $json.query }}%')\n{{ $json.doc_id ? \"AND i.doc_id = '\" + $json.doc_id + \"'\" : \"\" }}\nORDER BY i.page_number\nLIMIT 10"
+      },
+      "id": "get-images-001",
+      "name": "9. Get Images (Direct Query)",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [700, 600],
+      "credentials": {
+        "supabaseApi": {"id": "wIbJSxriBymUSxSs", "name": "Supabase - Discourse"}
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst data = $('1. Intent Detector').first().json;\n\nif (items.length === 0 || !items[0].json) {\n  return [{\n    json: {\n      answer: \"No images found matching your query.\",\n      images: [],\n      intent: 'get_images',\n      metadata: {\n        timestamp: new Date().toISOString(),\n        user_id: data.user_id\n      }\n    }\n  }];\n}\n\nconst images = items.map(item => item.json);\n\nconst answer = `Found ${images.length} image${images.length !== 1 ? 's' : ''}:\\n\\n` +\n  images.map((img, idx) => \n    `${idx + 1}. **Page ${img.page_number}** - ${img.caption || 'Untitled'}\\n` +\n    `   Document: ${img.doc_title}\\n` +\n    `   ${img.basic_summary || 'No description'}\\n` +\n    `   URL: ${img.s3_url}\\n`\n  ).join('\\n');\n\nreturn [{\n  json: {\n    answer,\n    images,\n    total: images.length,\n    intent: 'get_images',\n    metadata: {\n      timestamp: new Date().toISOString(),\n      user_id: data.user_id,\n      api_calls: 1,\n      cost: 0\n    }\n  }\n}];"
+      },
+      "id": "format-images-001",
+      "name": "10. Format Images Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 600]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT t.*, d.title as doc_title\nFROM document_tables t\nJOIN document_index d ON t.doc_id = d.id\nWHERE (t.description ILIKE '%{{ $json.query }}%' OR t.key_insights::text ILIKE '%{{ $json.query }}%')\n{{ $json.doc_id ? \"AND t.doc_id = '\" + $json.doc_id + \"'\" : \"\" }}\nORDER BY t.page_number\nLIMIT 10"
+      },
+      "id": "get-tables-001",
+      "name": "11. Get Tables (Direct Query)",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [700, 700],
+      "credentials": {
+        "supabaseApi": {"id": "wIbJSxriBymUSxSs", "name": "Supabase - Discourse"}
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst data = $('1. Intent Detector').first().json;\n\nif (items.length === 0 || !items[0].json) {\n  return [{\n    json: {\n      answer: \"No tables found matching your query.\",\n      tables: [],\n      intent: 'get_tables',\n      metadata: {\n        timestamp: new Date().toISOString(),\n        user_id: data.user_id\n      }\n    }\n  }];\n}\n\nconst tables = items.map(item => item.json);\n\nconst answer = `Found ${tables.length} table${tables.length !== 1 ? 's' : ''}:\\n\\n` +\n  tables.map((tbl, idx) => \n    `${idx + 1}. **Page ${tbl.page_number}** - ${tbl.description || 'Untitled Table'}\\n` +\n    `   Document: ${tbl.doc_title}\\n` +\n    `   ${tbl.key_insights && tbl.key_insights.length > 0 ? 'Key Insights: ' + tbl.key_insights.join(', ') : ''}\\n` +\n    `   \\`\\`\\`\\n${tbl.markdown ? tbl.markdown.substring(0, 200) + '...' : 'No data'}\\n\\`\\`\\`\\n`\n  ).join('\\n');\n\nreturn [{\n  json: {\n    answer,\n    tables,\n    total: tables.length,\n    intent: 'get_tables',\n    metadata: {\n      timestamp: new Date().toISOString(),\n      user_id: data.user_id,\n      api_calls: 1,\n      cost: 0\n    }\n  }\n}];"
+      },
+      "id": "format-tables-001",
+      "name": "12. Format Tables Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 700]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "respond-webhook-001",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1100, 400]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{"node": "1. Intent Detector", "type": "main", "index": 0}]]
+    },
+    "1. Intent Detector": {
+      "main": [[{"node": "2. Route by Intent", "type": "main", "index": 0}]]
+    },
+    "2. Route by Intent": {
+      "main": [
+        [{"node": "Greeting Response", "type": "main", "index": 0}],
+        [{"node": "3. List Documents (RPC)", "type": "main", "index": 0}],
+        [{"node": "5. Get Document Details (RPC)", "type": "main", "index": 0}],
+        [{"node": "7. Hybrid Search (Edge Function)", "type": "main", "index": 0}],
+        [{"node": "9. Get Images (Direct Query)", "type": "main", "index": 0}],
+        [{"node": "11. Get Tables (Direct Query)", "type": "main", "index": 0}]
+      ]
+    },
+    "Greeting Response": {
+      "main": [[{"node": "Respond to Webhook", "type": "main", "index": 0}]]
+    },
+    "3. List Documents (RPC)": {
+      "main": [[{"node": "4. Format Document List", "type": "main", "index": 0}]]
+    },
+    "4. Format Document List": {
+      "main": [[{"node": "Respond to Webhook", "type": "main", "index": 0}]]
+    },
+    "5. Get Document Details (RPC)": {
+      "main": [[{"node": "6. Format Document Info", "type": "main", "index": 0}]]
+    },
+    "6. Format Document Info": {
+      "main": [[{"node": "Respond to Webhook", "type": "main", "index": 0}]]
+    },
+    "7. Hybrid Search (Edge Function)": {
+      "main": [[{"node": "8. Format Search Results", "type": "main", "index": 0}]]
+    },
+    "8. Format Search Results": {
+      "main": [[{"node": "Respond to Webhook", "type": "main", "index": 0}]]
+    },
+    "9. Get Images (Direct Query)": {
+      "main": [[{"node": "10. Format Images Response", "type": "main", "index": 0}]]
+    },
+    "10. Format Images Response": {
+      "main": [[{"node": "Respond to Webhook", "type": "main", "index": 0}]]
+    },
+    "11. Get Tables (Direct Query)": {
+      "main": [[{"node": "12. Format Tables Response", "type": "main", "index": 0}]]
+    },
+    "12. Format Tables Response": {
+      "main": [[{"node": "Respond to Webhook", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "instanceId": "rag-smart-router"
+  }
+}

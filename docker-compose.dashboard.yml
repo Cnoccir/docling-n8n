@@ -1,0 +1,152 @@
+version: '3.8'
+
+services:
+  # Redis - Task queue broker and result backend
+  redis:
+    image: redis:7-alpine
+    container_name: docling-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - docling-network
+
+  # FastAPI Backend - API server
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: docling-backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env.docker
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+    volumes:
+      - ./backend:/app
+      - ./src:/app/src  # Mount existing ingestion code
+      - upload_temp:/tmp/uploads
+      - ./service-account-key.json:/app/service-account-key.json:ro  # Google Drive credentials
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - docling-network
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Celery Worker 1 - Document processing
+  worker-1:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: docling-worker-1
+    env_file:
+      - .env.docker
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - WORKER_ID=worker-1
+    volumes:
+      - ./backend:/app
+      - ./src:/app/src
+      - upload_temp:/tmp/uploads
+      - ./service-account-key.json:/app/service-account-key.json:ro  # Google Drive credentials
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - docling-network
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=1 --hostname=worker-1@%h
+
+  # Celery Worker 2 - Document processing
+  worker-2:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: docling-worker-2
+    env_file:
+      - .env.docker
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - WORKER_ID=worker-2
+    volumes:
+      - ./backend:/app
+      - ./src:/app/src
+      - upload_temp:/tmp/uploads
+      - ./service-account-key.json:/app/service-account-key.json:ro  # Google Drive credentials
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - docling-network
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=1 --hostname=worker-2@%h
+
+  # Celery Flower - Worker monitoring (optional)
+  flower:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: docling-flower
+    ports:
+      - "5555:5555"
+    env_file:
+      - .env.docker
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+    depends_on:
+      - redis
+      - worker-1
+    networks:
+      - docling-network
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    command: celery -A app.tasks.celery_app flower --port=5555
+
+  # React Dashboard - Frontend UI (Production with Nginx)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: docling-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    networks:
+      - docling-network
+
+networks:
+  docling-network:
+    driver: bridge
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: fd00::/80
+
+volumes:
+  redis_data:
+  upload_temp:

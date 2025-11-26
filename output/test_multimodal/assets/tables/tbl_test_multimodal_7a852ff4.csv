@@ -1,5 +1,0 @@
-Property,Value,Description
-Enabled,true or false,Activates and deactivates use of the component.
-HistoryConfig,,Container for sub-properties used to configure the attributes of the history record stored in the History space.
-Id,Text string,Read only value. String results from value configured in history extension's History Name property. An error string here indi- cates the History Name property is incorrectly configured .
-Time Zone,display or drop- down list,"The time zone is set up using the Set System Date/Time, which you access either using a platform connection and Platform Administration -> Change Date/Time or using one of the sta- tion's PlatformServices views (Platform Service Container"

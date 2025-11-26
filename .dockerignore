@@ -1,0 +1,77 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Git
+.git/
+.gitignore
+
+# Documentation (not needed in container)
+*.md
+!requirements*.md
+docs/
+._archive/
+
+# Test data and temp files
+test_data/
+input_data/
+*.pdf
+*.docx
+*.pptx
+
+# Environment files (copied separately)
+.env
+.env.local
+
+# Frontend (has its own Dockerfile)
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Migrations (applied separately)
+migrations/
+supabase/
+
+# N8N workflows (not needed in container)
+n8n-workflows/
+
+# PowerShell scripts (Windows-specific)
+*.ps1
+
+# Docker
+.dockerignore
+docker-compose*.yml
+Dockerfile
+
+# Claude artifacts
+.claude/
+
+# Prompts
+prompts/

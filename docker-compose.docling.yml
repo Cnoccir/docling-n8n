@@ -1,0 +1,10 @@
+version: "3.9"
+services:
+  docling-serve:
+    image: ghcr.io/docling-project/docling-serve:latest
+    container_name: docling-serve
+    ports:
+      - "5001:5000" # host:container
+    environment:
+      - UVICORN_WORKERS=1
+    restart: unless-stopped

@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/Users/tech/Projects/ame-freeletics-full/**)",
+      "Bash(docker ps:*)",
+      "Bash(docker-compose:*)",
+      "Bash(export PGPASSWORD='Ameinc4100')",
+      "Bash(psql:*)",
+      "Bash(curl:*)",
+      "Bash(C:/Users/tech/hierarchy_debug.json)",
+      "Bash(python:*)",
+      "Bash(if [ -f .env.docker ])",
+      "Bash(then echo \"\")",
+      "Bash(.env.docker)",
+      "Bash(else echo \"File .env.docker not found - use .env.docker.example\")",
+      "Bash(fi)",
+      "Bash(timeout 30 bash:*)",
+      "Bash(docker inspect:*)",
+      "Bash(findstr:*)",
+      "Bash(docker network connect:*)",
+      "Bash(docker exec:*)",
+      "Bash(docker logs:*)",
+      "Bash(docker restart:*)",
+      "Bash(docker build:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

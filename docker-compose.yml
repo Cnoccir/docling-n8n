@@ -1,47 +1,84 @@
 version: '3.8'
 
 services:
-  docling-api:
-    build:
-      context: .                        # Build from root context
-      dockerfile: Dockerfile            # Dockerfile is in the root now
+  docling-serve:
+    image: quay.io/docling-project/docling-serve:latest
+    container_name: docling-server
     ports:
-      - "8000:8000"
+      - "5001:5001"
     environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - DOCLING_SERVE_ENABLE_UI=true
+      - DOCLING_SERVE_MAX_SYNC_WAIT=300
+      - DOCLING_SERVE_CORS_ORIGINS=["*"]
     volumes:
-      - ./api:/app/api                  # Mount local api folder for live reloading
-      - docling_output:/app/output
-    restart: unless-stopped
+      - docling-scratch:/tmp/docling-scratch
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 30s
+      start_period: 40s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+        reservations:
+          memory: 4G
 
-  n8n:
-    image: n8nio/n8n:latest
+  redis:
+    image: redis:7-alpine
+    container_name: docling-redis
     ports:
-      - "5678:5678"
-    environment:
-      - N8N_PORT=5678
-      - N8N_PROTOCOL=http
-      - N8N_HOST=localhost
-      - N8N_DIAGNOSTICS_ENABLED=false
-      - GENERIC_TIMEZONE=UTC
-      - N8N_LOG_LEVEL=info
-      - WEBHOOK_URL=http://localhost:5678/
-      - NODE_ENV=production
-      - N8N_CUSTOM_EXTENSIONS=/home/node/.n8n/custom
-      - N8N_RUNNERS_ENABLED=true   # Enable task runners to avoid deprecation warnings
+      - "6379:6379"
+    command: redis-server --appendonly yes
     volumes:
-      - n8n_data:/home/node/.n8n
-      - ./n8n-node:/home/node/.n8n/custom/n8n-nodes-docling
-    depends_on:
-      - docling-api
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
     restart: unless-stopped
 
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: docling-backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env.docker
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    volumes:
+      - ./service-account-key.json:/app/service-account-key.json:ro
+      - ./output:/app/output
+      - ./temp:/app/temp
+      - ./documents:/app/documents
+    depends_on:
+      docling-serve:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 2G
+
 volumes:
-  docling_output:
-  n8n_data:
+  docling-scratch:
+    driver: local
+  redis-data:
+    driver: local
