@@ -59,7 +59,7 @@ services:
       - ./temp:/app/temp
       - ./documents:/app/documents
       # Hot reload for development
-      - ./backend/app:/app/backend/app
+      - ./backend/app:/app/app
       - ./src:/app/src
     depends_on:
       docling-serve:
@@ -72,6 +72,40 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 2G
+
+  worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: docling-worker
+    command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=1
+    env_file:
+      - .env.docker
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    volumes:
+      - ./service-account-key.json:/app/service-account-key.json:ro
+      - ./output:/app/output
+      - ./temp:/app/temp
+      - ./documents:/app/documents
+      # Hot reload for development
+      - ./backend/app:/app/app
+      - ./src:/app/src
+    depends_on:
+      docling-serve:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
     restart: unless-stopped
     deploy:
       resources:

@@ -10,6 +10,7 @@
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0"
   },
   "dependencies": {
+    "@types/react-syntax-highlighter": "^15.5.13",
     "axios": "^1.6.2",
     "date-fns": "^3.0.0",
     "lucide-react": "^0.294.0",
@@ -18,6 +19,7 @@
     "react-dropzone": "^14.2.3",
     "react-markdown": "^10.1.0",
     "react-router-dom": "^6.20.0",
+    "react-syntax-highlighter": "^16.1.0",
     "remark-gfm": "^4.0.1",
     "zustand": "^4.4.7"
   },

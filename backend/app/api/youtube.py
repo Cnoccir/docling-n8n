@@ -48,6 +48,14 @@ class VideoListItem(BaseModel):
     processed_at: Optional[str]
 
 
+class VideoListResponse(BaseModel):
+    """Response containing list of videos."""
+    documents: List[VideoListItem]
+    total: int
+    page: int
+    page_size: int
+
+
 class TranscriptSegment(BaseModel):
     """Single transcript segment with timestamp."""
     chunk_id: str
@@ -158,10 +166,10 @@ async def upload_youtube_video(request: YouTubeUploadRequest):
         with db.conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO jobs (
-                    id, filename, status, progress, current_step
+                    id, doc_id, filename, status, progress, current_step
                 )
-                VALUES (%s, %s, 'queued', 0, 'Waiting to start')
-            """, (job_id, f"YouTube: {youtube_id}"))
+                VALUES (%s, %s, %s, 'queued', 0, 'Waiting to start')
+            """, (job_id, video_id, f"YouTube: {youtube_id}"))
             db.conn.commit()
 
         # Submit to Celery
@@ -189,7 +197,7 @@ async def upload_youtube_video(request: YouTubeUploadRequest):
         db.conn.close()
 
 
-@router.get("/videos", response_model=List[VideoListItem])
+@router.get("/videos", response_model=VideoListResponse)
 async def list_youtube_videos(
     limit: int = 50,
     offset: int = 0,
@@ -204,6 +212,24 @@ async def list_youtube_videos(
     db = DatabaseClient()
 
     try:
+        # Get total count
+        with db.conn.cursor() as cur:
+            where_clause = "WHERE source_type = 'youtube'"
+            count_params = []
+
+            if status:
+                where_clause += " AND status = %s"
+                count_params.append(status)
+
+            cur.execute(f"""
+                SELECT COUNT(*)
+                FROM document_index
+                {where_clause}
+            """, count_params)
+
+            total = cur.fetchone()[0]
+
+        # Get videos
         with db.conn.cursor() as cur:
             # Build query with optional status filter
             where_clause = "WHERE source_type = 'youtube'"
@@ -246,7 +272,12 @@ async def list_youtube_videos(
                 processed_at=row[10].isoformat() if row[10] else None
             ))
 
-        return videos
+        return VideoListResponse(
+            documents=videos,
+            total=total,
+            page=offset // limit + 1,
+            page_size=limit
+        )
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -401,19 +432,48 @@ async def get_video_screenshots(
 async def delete_video(video_id: str):
     """
     Delete a video and all associated data.
+
+    This will delete:
+    - Document index entry
+    - All chunks and embeddings (CASCADE)
+    - Hierarchy data (CASCADE)
+    - Screenshots (database references, CASCADE)
+    - Associated jobs (manually deleted)
+
+    Note: S3 files are not automatically deleted for safety.
     """
     db = DatabaseClient()
 
     try:
         with db.conn.cursor() as cur:
-            # Check if exists
+            # Check if exists and get details
             cur.execute("""
-                SELECT id FROM document_index
+                SELECT id, title, youtube_id, channel_name,
+                       total_chunks, total_images, duration_seconds
+                FROM document_index
                 WHERE id = %s AND source_type = 'youtube'
             """, (video_id,))
 
-            if not cur.fetchone():
+            video = cur.fetchone()
+
+            if not video:
                 raise HTTPException(status_code=404, detail="Video not found")
+
+            video_id, title, youtube_id, channel_name, total_chunks, total_images, duration_seconds = video
+
+            # Count associated jobs before deletion
+            cur.execute("""
+                SELECT COUNT(*)
+                FROM jobs
+                WHERE doc_id = %s
+            """, (video_id,))
+            job_count = cur.fetchone()[0]
+
+            # Delete associated jobs (not handled by CASCADE)
+            cur.execute("""
+                DELETE FROM jobs
+                WHERE doc_id = %s
+            """, (video_id,))
 
             # Delete cascades to chunks, images, tables, hierarchy
             cur.execute("""
@@ -423,7 +483,22 @@ async def delete_video(video_id: str):
 
             db.conn.commit()
 
-        return {"message": f"Video {video_id} deleted successfully"}
+        return {
+            "doc_id": video_id,
+            "status": "deleted",
+            "message": f"Video '{title}' deleted successfully",
+            "deleted": {
+                "video": title,
+                "youtube_id": youtube_id,
+                "channel": channel_name,
+                "duration_seconds": duration_seconds or 0,
+                "chunks": total_chunks or 0,
+                "screenshots": total_images or 0,
+                "jobs": job_count,
+                "hierarchy": 1,
+                "note": "S3 screenshot files were not deleted (preserved for safety)"
+            }
+        }
 
     except HTTPException:
         raise

@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Search, Youtube, ExternalLink } from 'lucide-react';
 import { youtubeApi } from '@/services/api';
 import type { Document } from '@/types'; // Assuming youtube videos will have a similar structure
 import { formatRelativeTime, formatNumber, getStatusBadgeClass } from '@/utils/format';
 
 export default function Videos() {
+  const navigate = useNavigate();
   const [videos, setVideos] = useState<Document[]>([]);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -90,7 +92,7 @@ export default function Videos() {
             <div
               key={video.id}
               className="card hover:shadow-md transition-shadow cursor-pointer"
-              onClick={() => window.location.href = `/video/${video.id}`}
+              onClick={() => navigate(`/videos/${video.id}`)}
             >
               <div className="flex items-start justify-between mb-3">
                 <div className="flex-1">

@@ -1,6 +1,6 @@
 import { ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Home, Upload, FileText, Activity, FolderOpen, Youtube, Search } from 'lucide-react';
+import { Home, Upload, FileText, Activity, FolderOpen, Youtube, Search, BookOpen } from 'lucide-react';
 
 interface LayoutProps {
   children: ReactNode;
@@ -24,9 +24,18 @@ export default function Layout({ children }: LayoutProps) {
       <div className="fixed inset-y-0 left-0 w-64 bg-white border-r border-gray-200">
         <div className="flex flex-col h-full">
           {/* Logo */}
-          <div className="p-6 border-b border-gray-200">
-            <h1 className="text-2xl font-bold text-blue-600">Docling</h1>
-            <p className="text-sm text-gray-500 mt-1">Document Ingestion</p>
+          <div className="p-6 border-b border-gray-200 bg-gradient-to-br from-blue-50 to-purple-50">
+            <div className="flex items-center gap-3 mb-2">
+              <div className="p-2 bg-gradient-to-br from-blue-600 to-purple-600 rounded-lg shadow-lg">
+                <BookOpen className="w-6 h-6 text-white" />
+              </div>
+              <div>
+                <h1 className="text-xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+                  AME Knowledge
+                </h1>
+                <p className="text-xs text-gray-600 font-medium">Technical Library</p>
+              </div>
+            </div>
           </div>
 
           {/* Navigation */}
@@ -40,15 +49,15 @@ export default function Layout({ children }: LayoutProps) {
                   key={item.name}
                   to={item.href}
                   className={`
-                    flex items-center gap-3 px-4 py-3 rounded-lg transition-colors
+                    flex items-center gap-3 px-4 py-3 rounded-lg transition-all
                     ${
                       isActive
-                        ? 'bg-blue-50 text-blue-700 font-medium'
-                        : 'text-gray-700 hover:bg-gray-50'
+                        ? 'bg-gradient-to-r from-blue-600 to-purple-600 text-white font-semibold shadow-md'
+                        : 'text-gray-700 hover:bg-gray-100 hover:translate-x-1'
                     }
                   `}
                 >
-                  <Icon className="w-5 h-5" />
+                  <Icon className={`w-5 h-5 ${isActive ? 'animate-pulse' : ''}`} />
                   <span>{item.name}</span>
                 </Link>
               );
@@ -75,7 +84,7 @@ export default function Layout({ children }: LayoutProps) {
             </a>
 
             <p className="text-xs text-gray-500 text-center">
-              v1.0.0 • Built with FastAPI & React
+              AME Knowledge v2.0 • Powered by AI
             </p>
           </div>
         </div>

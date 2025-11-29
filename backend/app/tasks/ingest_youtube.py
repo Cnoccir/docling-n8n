@@ -3,6 +3,7 @@ import os
 import sys
 import time
 import traceback
+import json
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -17,7 +18,6 @@ from ingestion.youtube_processor import YouTubeProcessor
 from ingestion.image_processor import ImageProcessor  # REUSE!
 from ingestion.document_summarizer import DocumentSummarizer  # REUSE!
 from utils.embeddings import EmbeddingGenerator  # REUSE!
-from app.utils.cost_tracker import CostTracker
 
 
 def update_job_progress(db: DatabaseClient, job_id: str, progress: int, current_step: str):
@@ -64,11 +64,8 @@ def process_youtube_video(
     summarizer = DocumentSummarizer()
     embedding_gen = EmbeddingGenerator()
 
-    # Initialize cost tracker
-    cost_tracker = CostTracker(
-        query_type='video_ingestion',
-        query_text=url
-    )
+    # Manual cost tracking (CostTracker is for queries, not ingestion)
+    total_cost = 0.0
     total_tokens = 0
 
     try:
@@ -159,7 +156,7 @@ def process_youtube_video(
         # Track Whisper API cost ($0.006 per minute)
         audio_duration_minutes = metadata['duration'] / 60
         whisper_cost = audio_duration_minutes * 0.006
-        cost_tracker.add_cost(whisper_cost, 'whisper_transcription')
+        total_cost += whisper_cost
         print(f"  Transcription cost: ${whisper_cost:.4f}")
 
         # ============================================================
@@ -203,17 +200,26 @@ def process_youtube_video(
         print(f"\n[STEP 7/10] Processing screenshots...")
 
         processed_screenshots = 0
-        for screenshot in screenshots:
+        screenshot_data = []  # Collect processed screenshots for chunk linking
+
+        for idx, screenshot in enumerate(screenshots):
             try:
                 # Process exactly like PDF images!
-                image_processor.process_and_save_image(
+                image_id = image_processor.process_and_save_image(
                     image_path=screenshot['filepath'],
                     doc_id=video_id,
                     page_number=screenshot.get('page_no', int(screenshot['timestamp'] / 60)),
                     image_type='screenshot',
-                    timestamp=screenshot['timestamp']  # Add timestamp!
+                    timestamp=screenshot['timestamp'],  # Add timestamp!
+                    image_index=idx  # Add image_index for S3 upload
                 )
                 processed_screenshots += 1
+
+                # Store screenshot data for chunk linking
+                screenshot_data.append({
+                    'timestamp': screenshot['timestamp'],
+                    'image_id': image_id
+                })
 
                 # Update progress
                 progress = 75 + int((processed_screenshots / len(screenshots)) * 10)
@@ -224,6 +230,8 @@ def process_youtube_video(
 
             except Exception as e:
                 print(f"⚠️  Failed to process screenshot at {screenshot['timestamp']}s: {e}")
+                import traceback
+                traceback.print_exc()
 
         print(f"✓ Processed {processed_screenshots}/{len(screenshots)} screenshots")
 
@@ -322,7 +330,7 @@ def process_youtube_video(
         # Estimate ~100 tokens per chunk on average
         estimated_embedding_tokens = len(chunks) * 100
         embedding_cost = (estimated_embedding_tokens / 1_000_000) * 0.02
-        cost_tracker.add_cost(embedding_cost, 'embeddings')
+        total_cost += embedding_cost
         total_tokens += estimated_embedding_tokens
         print(f"  Embedding cost: ${embedding_cost:.4f} (~{estimated_embedding_tokens:,} tokens)")
 
@@ -354,13 +362,43 @@ def process_youtube_video(
                     chunk['timestamp_start'],
                     chunk['timestamp_end'],
                     chunk['video_url_with_timestamp'],
-                    chunk['section_path'],
-                    chunk.get('metadata', {})
+                    chunk['section_path'],  # Pass as list (Postgres array type)
+                    json.dumps(chunk.get('metadata', {}))  # Convert dict to JSON
                 ))
                 db.conn.commit()
                 chunk_count += 1
 
         print(f"✓ Saved {chunk_count} chunks")
+
+        # Link screenshots to chunks by timestamp (NEW - enable multimodal RAG!)
+        print(f"🔗 Linking screenshots to chunks...")
+        linked_count = 0
+
+        for screenshot in screenshot_data:
+            timestamp = screenshot['timestamp']
+            image_id = screenshot['image_id']
+
+            # Find chunk(s) that overlap with this timestamp
+            for i, chunk in enumerate(chunks):
+                if chunk['timestamp_start'] <= timestamp <= chunk['timestamp_end']:
+                    chunk_id = f"{video_id}_chunk_{i:06d}"
+
+                    # Link this screenshot to the chunk
+                    try:
+                        with db.conn.cursor() as cur:
+                            cur.execute("""
+                                UPDATE images
+                                SET chunk_id = %s
+                                WHERE id = %s
+                            """, (chunk_id, image_id))
+                            db.conn.commit()
+                        linked_count += 1
+                    except Exception as e:
+                        print(f"  WARNING: Failed to link screenshot {image_id}: {e}")
+                    break  # Only link to first matching chunk
+
+        print(f"OK Linked {linked_count}/{len(screenshot_data)} screenshots to chunks (multimodal context enabled!)")
+
 
         # Save hierarchy
         with db.conn.cursor() as cur:
@@ -369,21 +407,24 @@ def process_youtube_video(
                 VALUES (%s, %s)
                 ON CONFLICT (doc_id) DO UPDATE
                 SET hierarchy = EXCLUDED.hierarchy
-            """, (video_id, video_data['hierarchy']))
+            """, (video_id, json.dumps(video_data['hierarchy'])))  # Convert dict to JSON
             db.conn.commit()
 
         print(f"✓ Saved hierarchy with {len(chapters)} chapters")
 
         # Generate document summary
         print(f"\n📝 Generating document summary...")
-        full_transcript = ' '.join([c['content'] for c in chunks[:10]])  # First 10 chunks
-        summary = summarizer.generate_summary(full_transcript, metadata['title'])
+
+        # Create a simple doc structure for the summarizer
+        doc_structure = {
+            'pages': video_data['pages'],
+            'pictures': video_data['pictures']
+        }
+        summary, summary_tokens = summarizer.generate_document_summary(doc_structure, metadata['title'])
 
         # Track summarization cost (gpt-4o-mini: ~$0.15/1M tokens)
-        # Estimate summary uses ~500 tokens input + 200 tokens output
-        summary_tokens = 700
         summary_cost = (summary_tokens / 1_000_000) * 0.15
-        cost_tracker.add_cost(summary_cost, 'summarization')
+        total_cost += summary_cost
         total_tokens += summary_tokens
         print(f"  Summary cost: ${summary_cost:.4f} (~{summary_tokens} tokens)")
 
@@ -391,11 +432,8 @@ def process_youtube_video(
         # Estimate ~1000 tokens for chapter detection
         chapter_tokens = 1000
         chapter_cost = (chapter_tokens / 1_000_000) * 0.15
-        cost_tracker.add_cost(chapter_cost, 'chapter_detection')
+        total_cost += chapter_cost
         total_tokens += chapter_tokens
-
-        # Get total cost from tracker
-        total_cost = cost_tracker.total_cost
 
         # Update document status
         processing_duration = time.time() - start_time
@@ -415,7 +453,17 @@ def process_youtube_video(
         )
 
         # Update job to completed
-        update_job_progress(db, job_id, 100, 'Completed')
+        with db.conn.cursor() as cur:
+            cur.execute("""
+                UPDATE jobs
+                SET status = 'completed',
+                    progress = 100,
+                    current_step = 'Completed',
+                    completed_at = NOW(),
+                    updated_at = NOW()
+                WHERE id = %s
+            """, (job_id,))
+            db.conn.commit()
 
         # Cleanup temporary files
         print(f"\n🧹 Cleaning up...")
@@ -459,6 +507,7 @@ def process_youtube_video(
                 UPDATE jobs
                 SET status = 'failed',
                     error_message = %s,
+                    completed_at = NOW(),
                     updated_at = NOW()
                 WHERE id = %s
             """, (error_msg, job_id))

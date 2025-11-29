@@ -449,8 +449,52 @@ class DatabaseClient:
         """Get tables on specific pages."""
         with self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute("""
-                SELECT * FROM document_tables 
+                SELECT * FROM document_tables
                 WHERE doc_id = %s AND page_number = ANY(%s)
                 ORDER BY page_number
+            """, (doc_id, page_numbers))
+            return cur.fetchall()
+
+    # ==================== Image Retrieval Operations ====================
+
+    def get_images_for_chunk(self, chunk_id: str) -> List[Dict[str, Any]]:
+        """Get images associated with a chunk (same page/section)."""
+        with self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT i.id, i.s3_url, i.caption, i.image_type, i.page_number, i.ocr_text
+                FROM images i
+                JOIN chunks c ON i.doc_id = c.doc_id AND i.page_number = c.page_number
+                WHERE c.id = %s
+                ORDER BY i.page_number, i.image_index
+                LIMIT 5
+            """, (chunk_id,))
+            return cur.fetchall()
+
+    def get_screenshots_for_timestamp(
+        self, doc_id: str, start_time: float, end_time: float
+    ) -> List[Dict[str, Any]]:
+        """Get video screenshots within timestamp range (±2 second buffer)."""
+        with self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT id, s3_url, ocr_text, caption, timestamp
+                FROM images
+                WHERE doc_id = %s
+                  AND timestamp IS NOT NULL
+                  AND timestamp >= %s - 2
+                  AND timestamp <= %s + 2
+                ORDER BY timestamp
+                LIMIT 3
+            """, (doc_id, start_time, end_time))
+            return cur.fetchall()
+
+    def get_images_by_pages(self, doc_id: str, page_numbers: List[int]) -> List[Dict[str, Any]]:
+        """Get images on specific pages."""
+        with self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT id, s3_url, caption, image_type, page_number, ocr_text
+                FROM images
+                WHERE doc_id = %s AND page_number = ANY(%s)
+                ORDER BY page_number, image_index
+                LIMIT 10
             """, (doc_id, page_numbers))
             return cur.fetchall()

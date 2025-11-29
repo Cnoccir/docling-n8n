@@ -1,7 +1,9 @@
 import { useState } from 'react';
-import { Search, FileText, Youtube, Loader2, ExternalLink, Play } from 'lucide-react';
+import { Search, FileText, Youtube, Loader2, ExternalLink, Play, Image as ImageIcon } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { unifiedChatApi } from '@/services/api';
 import { useNavigate } from 'react-router-dom';
 
@@ -20,6 +22,14 @@ interface Citation {
   thumbnail_url?: string;
 }
 
+interface RelatedImage {
+  url: string;
+  caption?: string;
+  image_type?: string;
+  page_number?: number;
+  timestamp?: number;
+}
+
 interface SearchResult {
   answer: string;
   citations: Citation[];
@@ -27,6 +37,7 @@ interface SearchResult {
   total_sources_found: number;
   model_used: string;
   tokens_used: number;
+  related_images?: RelatedImage[];
 }
 
 export default function UnifiedSearch() {
@@ -67,7 +78,7 @@ export default function UnifiedSearch() {
         question: query,
         source_types,
         top_k_per_source: 5,
-        use_images: false,
+        use_images: true,
       });
 
       setResult(response);
@@ -102,10 +113,10 @@ export default function UnifiedSearch() {
       {/* Header */}
       <div className="text-center space-y-3">
         <h1 className="text-4xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-          Unified Knowledge Search
+          AME Knowledge Search
         </h1>
         <p className="text-gray-600 text-lg">
-          Search across all your documents and videos in one place
+          Your technical knowledge repository - search across documents, videos, and more
         </p>
       </div>
 
@@ -194,11 +205,111 @@ export default function UnifiedSearch() {
               </div>
             </div>
 
-            <div className="prose prose-base max-w-none">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            <div className="prose prose-lg max-w-none">
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  code({ className, children }: any) {
+                    const match = /language-(\w+)/.exec(className || '');
+                    const inline = !match;
+                    return !inline ? (
+                      <SyntaxHighlighter
+                        style={vscDarkPlus as any}
+                        language={match[1]}
+                        PreTag="div"
+                      >
+                        {String(children).replace(/\n$/, '')}
+                      </SyntaxHighlighter>
+                    ) : (
+                      <code className="bg-gray-100 px-1.5 py-0.5 rounded text-sm font-mono text-pink-600">
+                        {children}
+                      </code>
+                    );
+                  },
+                  h2: ({ children }) => (
+                    <h2 className="text-2xl font-bold text-gray-900 mt-8 mb-4 border-b pb-2">{children}</h2>
+                  ),
+                  h3: ({ children }) => (
+                    <h3 className="text-xl font-semibold text-gray-800 mt-6 mb-3">{children}</h3>
+                  ),
+                  blockquote: ({ children }) => (
+                    <blockquote className="border-l-4 border-blue-500 pl-4 py-2 bg-blue-50 italic text-gray-700 my-4">
+                      {children}
+                    </blockquote>
+                  ),
+                  ul: ({ children }) => (
+                    <ul className="list-disc list-inside space-y-2 my-4">{children}</ul>
+                  ),
+                  ol: ({ children }) => (
+                    <ol className="list-decimal list-inside space-y-2 my-4">{children}</ol>
+                  ),
+                  li: ({ children }) => (
+                    <li className="text-gray-700 leading-relaxed">{children}</li>
+                  ),
+                  p: ({ children }) => (
+                    <p className="text-gray-800 leading-relaxed my-3">{children}</p>
+                  ),
+                  strong: ({ children }) => (
+                    <strong className="font-bold text-gray-900">{children}</strong>
+                  ),
+                  a: ({ href, children }) => (
+                    <a href={href} className="text-blue-600 hover:text-blue-800 underline" target="_blank" rel="noopener noreferrer">
+                      {children}
+                    </a>
+                  ),
+                }}
+              >
                 {result.answer}
               </ReactMarkdown>
             </div>
+
+            {/* Related Images */}
+            {result.related_images && result.related_images.length > 0 && (
+              <div className="mt-8 border-t pt-6">
+                <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                  <ImageIcon className="w-5 h-5 text-blue-600" />
+                  Related Visual Content ({result.related_images.length})
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {result.related_images.map((image, idx) => (
+                    <div key={idx} className="border border-gray-200 rounded-lg overflow-hidden hover:shadow-lg transition-shadow bg-white">
+                      <div className="aspect-video bg-gray-100 relative overflow-hidden">
+                        <img
+                          src={image.url}
+                          alt={image.caption || `Related image ${idx + 1}`}
+                          className="w-full h-full object-contain hover:scale-105 transition-transform duration-200"
+                          loading="lazy"
+                        />
+                      </div>
+                      {(image.caption || image.page_number || image.timestamp !== undefined) && (
+                        <div className="p-3 bg-gray-50">
+                          {image.caption && (
+                            <p className="text-xs text-gray-700 line-clamp-2 mb-2">{image.caption}</p>
+                          )}
+                          <div className="flex items-center gap-2 flex-wrap">
+                            {image.page_number && (
+                              <span className="inline-flex items-center px-2 py-0.5 bg-blue-100 text-blue-700 text-xs rounded-full">
+                                📄 Page {image.page_number}
+                              </span>
+                            )}
+                            {image.timestamp !== undefined && (
+                              <span className="inline-flex items-center px-2 py-0.5 bg-red-100 text-red-700 text-xs rounded-full">
+                                ▶ {formatTimestamp(image.timestamp)}
+                              </span>
+                            )}
+                            {image.image_type && (
+                              <span className="inline-flex items-center px-2 py-0.5 bg-gray-200 text-gray-700 text-xs rounded-full capitalize">
+                                {image.image_type}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Citations Section */}

@@ -31,6 +31,6 @@ google-auth-httplib2>=0.2.0
 google-api-python-client>=2.114.0
 
 # YouTube video processing
-yt-dlp==2024.12.23
+yt-dlp==2025.11.12
 ffmpeg-python==0.2.0
 

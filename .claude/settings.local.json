@@ -21,7 +21,11 @@
       "Bash(docker exec:*)",
       "Bash(docker logs:*)",
       "Bash(docker restart:*)",
-      "Bash(docker build:*)"
+      "Bash(docker build:*)",
+      "Bash(cat:*)",
+      "Bash(then echo \".env.docker exists\")",
+      "Bash(else echo \".env.docker not found\")",
+      "Bash(npm run build:*)"
     ],
     "deny": [],
     "ask": []

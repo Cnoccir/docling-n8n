@@ -10,6 +10,7 @@ from database.db_client import DatabaseClient
 from app.models.schemas import JobResponse, JobListResponse, QueueStats, WorkerInfo
 from app.tasks.celery_app import celery_app
 from app.tasks.ingest import process_document
+from app.tasks.ingest_youtube import process_youtube_video
 from app.utils.checkpoint import ProcessingCheckpoint
 
 router = APIRouter()
@@ -248,10 +249,35 @@ def retry_job(job_id: str):
                 new_retry_count = cur.fetchone()[0]
                 db.conn.commit()
 
-                # Re-submit to Celery
-                task = process_document.apply_async(
-                    args=[job_id, file_path, doc_id, filename]
-                )
+                # Check if this is a YouTube job or PDF job
+                if filename.startswith("YouTube:"):
+                    # Try to get video details from document_index
+                    cur.execute("""
+                        SELECT source_url, tags, categories
+                        FROM document_index
+                        WHERE id = %s
+                    """, (doc_id,))
+                    video_row = cur.fetchone()
+
+                    if video_row:
+                        source_url, tags, categories = video_row
+                    else:
+                        # Video not in document_index yet (failed during download)
+                        # Extract YouTube ID from video_id (format: video_<youtube_id>)
+                        youtube_id = doc_id.replace('video_', '')
+                        source_url = f"https://www.youtube.com/watch?v={youtube_id}"
+                        tags = []
+                        categories = []
+
+                    # Re-submit YouTube job to Celery
+                    task = process_youtube_video.apply_async(
+                        args=[job_id, source_url, doc_id, tags, categories]
+                    )
+                else:
+                    # Re-submit PDF job to Celery
+                    task = process_document.apply_async(
+                        args=[job_id, file_path, doc_id, filename]
+                    )
 
                 # Update task_id
                 cur.execute("""
@@ -328,10 +354,35 @@ def resume_job(job_id: str):
                 """, (job_id,))
                 db.conn.commit()
 
-                # Re-submit to Celery (will use checkpoint)
-                task = process_document.apply_async(
-                    args=[job_id, file_path, doc_id, filename]
-                )
+                # Check if this is a YouTube job or PDF job
+                if filename.startswith("YouTube:"):
+                    # Try to get video details from document_index
+                    cur.execute("""
+                        SELECT source_url, tags, categories
+                        FROM document_index
+                        WHERE id = %s
+                    """, (doc_id,))
+                    video_row = cur.fetchone()
+
+                    if video_row:
+                        source_url, tags, categories = video_row
+                    else:
+                        # Video not in document_index yet (failed during download)
+                        # Extract YouTube ID from video_id (format: video_<youtube_id>)
+                        youtube_id = doc_id.replace('video_', '')
+                        source_url = f"https://www.youtube.com/watch?v={youtube_id}"
+                        tags = []
+                        categories = []
+
+                    # Re-submit YouTube job to Celery (will use checkpoint)
+                    task = process_youtube_video.apply_async(
+                        args=[job_id, source_url, doc_id, tags, categories]
+                    )
+                else:
+                    # Re-submit PDF job to Celery (will use checkpoint)
+                    task = process_document.apply_async(
+                        args=[job_id, file_path, doc_id, filename]
+                    )
 
                 # Update task_id
                 cur.execute("""

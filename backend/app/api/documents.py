@@ -425,22 +425,48 @@ def delete_document(doc_id: str):
     """
     Delete a document and all associated data.
 
-    Warning: This will delete:
+    This will delete:
     - Document index entry
-    - All chunks and embeddings
-    - Hierarchy data
-    - Images (references, not S3 files)
-    - Tables
+    - All chunks and embeddings (CASCADE)
+    - Hierarchy data (CASCADE)
+    - Images (database references, CASCADE)
+    - Tables (CASCADE)
+    - Associated jobs (manually deleted)
+
+    Note: S3 files are not automatically deleted for safety.
     """
     db = DatabaseClient()
 
     try:
         with db:
             with db.conn.cursor() as cur:
-                # Check if document exists
-                cur.execute("SELECT id FROM document_index WHERE id = %s", (doc_id,))
-                if not cur.fetchone():
+                # Check if document exists and get details
+                cur.execute("""
+                    SELECT id, title, filename, source_type,
+                           total_chunks, total_images, total_tables
+                    FROM document_index
+                    WHERE id = %s
+                """, (doc_id,))
+                doc = cur.fetchone()
+
+                if not doc:
                     raise HTTPException(status_code=404, detail="Document not found")
+
+                doc_id, title, filename, source_type, total_chunks, total_images, total_tables = doc
+
+                # Count associated jobs before deletion
+                cur.execute("""
+                    SELECT COUNT(*)
+                    FROM jobs
+                    WHERE doc_id = %s
+                """, (doc_id,))
+                job_count = cur.fetchone()[0]
+
+                # Delete associated jobs (not handled by CASCADE)
+                cur.execute("""
+                    DELETE FROM jobs
+                    WHERE doc_id = %s
+                """, (doc_id,))
 
                 # Delete document (cascades to chunks, hierarchy, images, tables)
                 cur.execute("DELETE FROM document_index WHERE id = %s", (doc_id,))
@@ -449,7 +475,17 @@ def delete_document(doc_id: str):
                 return {
                     "doc_id": doc_id,
                     "status": "deleted",
-                    "message": "Document deleted successfully"
+                    "message": f"Document '{title}' deleted successfully",
+                    "deleted": {
+                        "document": filename,
+                        "source_type": source_type,
+                        "chunks": total_chunks or 0,
+                        "images": total_images or 0,
+                        "tables": total_tables or 0,
+                        "jobs": job_count,
+                        "hierarchy": 1,
+                        "note": "S3 files were not deleted (preserved for safety)"
+                    }
                 }
 
     except HTTPException:

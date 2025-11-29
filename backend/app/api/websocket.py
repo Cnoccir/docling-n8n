@@ -65,13 +65,19 @@ async def poll_job_updates():
             try:
                 db = DatabaseClient()
                 with db.conn.cursor() as cur:
-                    # Get active jobs (queued or processing)
+                    # Get active jobs (queued, processing) and recently completed/failed jobs
+                    # Include completed/failed jobs updated within last 5 minutes for final status updates
                     cur.execute("""
                         SELECT
                             id, status, progress, current_step, updated_at,
                             filename, doc_id, error_message
                         FROM jobs
-                        WHERE status IN ('queued', 'processing')
+                        WHERE
+                            status IN ('queued', 'processing')
+                            OR (
+                                status IN ('completed', 'failed', 'cancelled')
+                                AND updated_at > NOW() - INTERVAL '5 minutes'
+                            )
                         ORDER BY updated_at DESC
                     """)
 

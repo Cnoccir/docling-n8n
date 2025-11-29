@@ -45,7 +45,7 @@ class ImageProcessor:
     def __init__(self):
         self.openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
         self.s3_storage = S3ImageStorage()
-        self.model = os.getenv('DOC_SUMMARY_MODEL', 'gpt-4o-mini')
+        self.model = os.getenv('VISION_MODEL', 'gpt-4o-mini')
         
         # Intelligent filtering (enabled by default for production)
         self.enable_filtering = os.getenv('ENABLE_IMAGE_FILTERING', 'true').lower() == 'true'
@@ -390,3 +390,191 @@ Be specific and technical."""
         except Exception as e:
             print(f"Error generating detailed description: {e}")
             return ""
+# Temporary file with the new method to add to ImageProcessor
+
+    def process_and_save_image(
+        self,
+        image_path: str,
+        doc_id: str,
+        page_number: int,
+        image_type: str = 'screenshot',
+        timestamp: Optional[float] = None,
+        image_index: int = 0
+    ) -> Optional[str]:
+        """
+        Process a single image from filepath (used for video screenshots).
+
+        Args:
+            image_path: Path to image file
+            doc_id: Document/Video ID
+            page_number: Page number (or minute number for videos)
+            image_type: Type of image (screenshot, diagram, etc.)
+            timestamp: Optional timestamp for video screenshots
+            image_index: Index of image on page (for S3 upload)
+
+        Returns:
+            Image ID if successful, None otherwise
+        """
+        try:
+            from database.db_client import DatabaseClient
+            import uuid
+
+            # Read and encode image
+            with open(image_path, 'rb') as f:
+                image_data = base64.b64encode(f.read()).decode('utf-8')
+
+            # Compress image
+            compressed_data = self._compress_image(image_data, max_size=512)
+
+            # Generate image ID
+            image_id = f"{doc_id}_img_{uuid.uuid4().hex[:12]}"
+
+            # Upload to S3 (match S3ImageStorage.upload_image() signature)
+            s3_url = self.s3_storage.upload_image(
+                image_base64=compressed_data,
+                doc_id=doc_id,
+                page_number=page_number,
+                image_index=image_index,
+                image_format='jpeg'
+            )
+
+            if not s3_url:
+                print(f"⚠️  Failed to upload image to S3: {image_path}")
+                return None
+
+            # Generate basic summary AND extract OCR text (like Docling does!)
+            ocr_text = None
+            try:
+                # First call: Basic visual summary
+                summary_prompt = """Briefly describe this image in 1-2 sentences.
+Focus on what's shown and its purpose (e.g., 'Settings menu screenshot', 'Code editor with Python file')."""
+
+                summary_response = self.openai_client.chat.completions.create(
+                    model=self.model,
+                    messages=[{
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": summary_prompt},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{compressed_data}",
+                                    "detail": "low"
+                                }
+                            }
+                        ]
+                    }],
+                    max_tokens=100
+                )
+
+                basic_summary = summary_response.choices[0].message.content
+                tokens_used = summary_response.usage.total_tokens
+
+                # Second call: OCR text extraction (critical for multimodal RAG!)
+                ocr_prompt = """Extract ALL visible text from this image.
+Return ONLY the text content, preserving layout and structure.
+If no text is visible, return 'No text detected'."""
+
+                ocr_response = self.openai_client.chat.completions.create(
+                    model=self.model,
+                    messages=[{
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": ocr_prompt},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{compressed_data}",
+                                    "detail": "high"  # High detail for OCR accuracy!
+                                }
+                            }
+                        ]
+                    }],
+                    max_tokens=500
+                )
+
+                ocr_text = ocr_response.choices[0].message.content
+                tokens_used += ocr_response.usage.total_tokens
+
+                # Clean up OCR text
+                if ocr_text and ocr_text.strip().lower() != 'no text detected':
+                    ocr_text = ocr_text.strip()
+                else:
+                    ocr_text = None
+
+            except Exception as e:
+                print(f"WARNING: Failed to generate summary/OCR for {image_path}: {e}")
+                basic_summary = None
+                ocr_text = None
+                tokens_used = 0
+
+                ocr_prompt = """Extract ALL visible text from this image.
+Return ONLY the text content, preserving layout and structure.
+If no text is visible, return 'No text detected'."""
+
+                ocr_response = self.openai_client.chat.completions.create(
+                    model=self.model,
+                    messages=[{
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": ocr_prompt},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{compressed_data}",
+                                    "detail": "high"  # High detail for OCR accuracy!
+                                }
+                            }
+                        ]
+                    }],
+                    max_tokens=500
+                )
+
+                ocr_text = ocr_response.choices[0].message.content
+                tokens_used += ocr_response.usage.total_tokens
+
+                # Clean up OCR text
+                if ocr_text and ocr_text.strip().lower() != 'no text detected':
+                    ocr_text = ocr_text.strip()
+                else:
+                    ocr_text = None
+
+            except Exception as e:
+                print(f"⚠️  Failed to generate summary/OCR for {image_path}: {e}")
+                basic_summary = None
+                ocr_text = None
+                tokens_used = 0
+
+            # Save to database
+            db = DatabaseClient()
+            try:
+                with db.conn.cursor() as cur:
+                    # Insert image with timestamp
+                    cur.execute("""
+                        INSERT INTO images (
+                            id, doc_id, page_number, s3_url, image_type,
+                            basic_summary, ocr_text, tokens_used, timestamp
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (id) DO NOTHING
+                    """, (
+                        image_id, doc_id, page_number, s3_url, image_type,
+                        basic_summary, ocr_text, tokens_used, timestamp
+                    ))
+                    db.conn.commit()
+
+                print(f"   > Saved screenshot: {image_id}")
+                if ocr_text:
+                    preview = ocr_text[:80] + '...' if len(ocr_text) > 80 else ocr_text
+                    print(f"     OCR: {preview}")
+
+                return image_id
+
+            finally:
+                db.conn.close()
+
+        except Exception as e:
+            print(f"⚠️  Failed to process image {image_path}: {e}")
+            import traceback
+            traceback.print_exc()
+            return None

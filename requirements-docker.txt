@@ -239,5 +239,5 @@ tornado==6.5.2
 antlr4-python3-runtime==4.9.3
 
 # YouTube video processing
-yt-dlp==2024.12.23
+yt-dlp==2025.11.12
 ffmpeg-python==0.2.0

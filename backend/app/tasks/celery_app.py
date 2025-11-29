@@ -7,7 +7,7 @@ celery_app = Celery(
     "docling_dashboard",
     broker=os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0"),
     backend=os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/1"),
-    include=['app.tasks.ingest']
+    include=['app.tasks.ingest', 'app.tasks.ingest_youtube']
 )
 
 # Celery configuration

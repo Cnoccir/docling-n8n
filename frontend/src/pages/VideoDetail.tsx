@@ -1,56 +1,10 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Youtube as YoutubeIcon, MessageSquare, BookOpen, FileText } from 'lucide-react';
+import { ArrowLeft, Youtube as YoutubeIcon } from 'lucide-react';
 import { youtubeApi } from '@/services/api';
-import type { Document } from '@/types'; // Using Document type for video for now, assuming similar structure
+import type { Document } from '@/types';
 import { formatNumber, formatRelativeTime, getStatusBadgeClass } from '@/utils/format';
-import DocumentChatImproved from '@/components/DocumentChatImproved'; // Will adapt this for video
-
-// YouTube IFrame API types
-interface YT {
-  Player: new (elementId: string, config: YTPlayerConfig) => YTPlayer;
-  PlayerState: {
-    UNSTARTED: number;
-    ENDED: number;
-    PLAYING: number;
-    PAUSED: number;
-    BUFFERING: number;
-    CUED: number;
-  };
-}
-
-declare global {
-  interface Window {
-    YT: YT;
-    onYouTubeIframeAPIReady: () => void;
-  }
-}
-
-interface YTPlayerConfig {
-  videoId: string;
-  height?: string;
-  width?: string;
-  playerVars?: {
-    autoplay?: number;
-    controls?: number;
-    rel?: number;
-    modestbranding?: number;
-  };
-  events?: {
-    onReady?: (event: any) => void;
-    onStateChange?: (event: any) => void;
-  };
-}
-
-interface YTPlayer {
-  playVideo: () => void;
-  pauseVideo: () => void;
-  seekTo: (seconds: number, allowSeekAhead: boolean) => void;
-  getCurrentTime: () => number;
-  getDuration: () => number;
-  getPlayerState: () => number;
-  destroy: () => void;
-}
+import DocumentChatImproved from '@/components/DocumentChatImproved';
 
 interface VideoData extends Document {
   youtube_id: string;
@@ -61,9 +15,9 @@ interface VideoData extends Document {
 }
 
 interface TranscriptSegment {
-  timestamp: number;
+  timestamp_start: number;
   timestamp_formatted: string;
-  text: string;
+  content: string;
   video_url: string;
 }
 
@@ -74,10 +28,6 @@ export default function VideoDetail() {
   const [video, setVideo] = useState<VideoData | null>(null);
   const [transcript, setTranscript] = useState<TranscriptSegment[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'overview' | 'chat' | 'transcript'>('overview');
-  const [currentTime, setCurrentTime] = useState(0);
-  const playerRef = useRef<YTPlayer | null>(null);
-  const timeUpdateIntervalRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (videoId) {
@@ -90,129 +40,17 @@ export default function VideoDetail() {
       setLoading(true);
 
       const response = await youtubeApi.get(videoId!);
-      setVideo(response.video);
-      setTranscript(response.transcript);
+      setVideo(response);  // Response is the video object itself
+      setTranscript(response.transcript || []);
 
     } catch (error) {
       console.error('Failed to fetch video:', error);
+      // Set video to null on error so we show "Video not found"
+      setVideo(null);
     } finally {
       setLoading(false);
     }
   }
-
-  // Load YouTube IFrame API
-  useEffect(() => {
-    // Check if API already loaded
-    if (window.YT && window.YT.Player) {
-      return;
-    }
-
-    // Load YouTube IFrame API script
-    const tag = document.createElement('script');
-    tag.src = 'https://www.youtube.com/iframe_api';
-    const firstScriptTag = document.getElementsByTagName('script')[0];
-    firstScriptTag.parentNode?.insertBefore(tag, firstScriptTag);
-
-    return () => {
-      // Cleanup on unmount
-      if (playerRef.current) {
-        playerRef.current.destroy();
-      }
-      if (timeUpdateIntervalRef.current) {
-        clearInterval(timeUpdateIntervalRef.current);
-      }
-    };
-  }, []);
-
-  // Initialize YouTube player when video data is loaded and in chat tab
-  useEffect(() => {
-    if (!video || activeTab !== 'chat' || !window.YT) {
-      return;
-    }
-
-    // Define the callback for when API is ready
-    const initializePlayer = () => {
-      if (playerRef.current) {
-        playerRef.current.destroy();
-      }
-
-      try {
-        new window.YT.Player('youtube-player-chat', {
-          videoId: video.youtube_id,
-          playerVars: {
-            autoplay: 0,
-            controls: 1,
-            rel: 0,
-            modestbranding: 1,
-          },
-          events: {
-            onReady: (event: any) => {
-              playerRef.current = event.target;
-
-              // Start tracking current time
-              if (timeUpdateIntervalRef.current) {
-                clearInterval(timeUpdateIntervalRef.current);
-              }
-              timeUpdateIntervalRef.current = window.setInterval(() => {
-                if (playerRef.current) {
-                  try {
-                    const time = playerRef.current.getCurrentTime();
-                    setCurrentTime(time);
-                  } catch (e) {
-                    // Player might not be ready
-                  }
-                }
-              }, 1000);
-            },
-            onStateChange: (_event: any) => {
-              // Update time when state changes
-              if (playerRef.current) {
-                try {
-                  const time = playerRef.current.getCurrentTime();
-                  setCurrentTime(time);
-                } catch (e) {
-                  // Player might not be ready
-                }
-              }
-            },
-          },
-        });
-      } catch (error) {
-        console.error('Failed to initialize YouTube player:', error);
-      }
-    };
-
-    // Check if YT.Player is available, otherwise wait for API to load
-    if (window.YT && window.YT.Player) {
-      initializePlayer();
-    } else {
-      window.onYouTubeIframeAPIReady = initializePlayer;
-    }
-
-    return () => {
-      if (timeUpdateIntervalRef.current) {
-        clearInterval(timeUpdateIntervalRef.current);
-      }
-    };
-  }, [video, activeTab]);
-
-  // Jump to specific timestamp in video
-  const jumpToTimestamp = (seconds: number) => {
-    if (playerRef.current) {
-      try {
-        playerRef.current.seekTo(seconds, true);
-        playerRef.current.playVideo();
-        setCurrentTime(seconds);
-
-        // Ensure chat tab is active
-        if (activeTab !== 'chat') {
-          setActiveTab('chat');
-        }
-      } catch (error) {
-        console.error('Failed to jump to timestamp:', error);
-      }
-    }
-  };
 
   // Function to format seconds into HH:MM:SS
   const formatSeconds = (seconds: number) => {
@@ -306,99 +144,53 @@ export default function VideoDetail() {
         </div>
       )}
 
-      {/* Tabs */}
-      <div className="border-b">
-        <div className="flex gap-4">
-          {[
-            { id: 'overview', label: 'Overview', icon: BookOpen },
-            { id: 'chat', label: 'Chat with Video', icon: MessageSquare },
-            { id: 'transcript', label: `Transcript (${transcript.length})`, icon: FileText },
-          ].map(tab => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id as any)}
-              className={`flex items-center gap-2 px-4 py-3 border-b-2 transition-colors ${
-                activeTab === tab.id
-                  ? 'border-blue-600 text-blue-600'
-                  : 'border-transparent text-gray-600 hover:text-gray-900'
-              }`}
-            >
-              <tab.icon className="w-4 h-4" />
-              {tab.label}
-            </button>
-          ))}
+      {/* Main Content: Side-by-side Video + Chat */}
+      <div className="flex gap-6 h-[800px]">
+        {/* Left: Video & Transcript */}
+        <div className="w-1/2 flex flex-col gap-4">
+          {/* Video Player */}
+          <div className="card p-0 overflow-hidden flex-shrink-0" style={{ height: '450px' }}>
+            <iframe
+              className="w-full h-full"
+              src={youtubeEmbedUrl}
+              frameBorder="0"
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+              allowFullScreen
+              title={video.title}
+            ></iframe>
+          </div>
+
+          {/* Transcript Below Video */}
+          {transcript.length > 0 && (
+            <div className="card flex-1 overflow-hidden flex flex-col">
+              <h3 className="text-lg font-semibold mb-3">Transcript</h3>
+              <div className="flex-1 overflow-y-auto space-y-2 pr-2">
+                {transcript.map((segment, index) => (
+                  <div key={index} className="text-sm hover:bg-gray-50 p-2 rounded transition-colors">
+                    <a
+                      href={segment.video_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-600 hover:underline font-medium mr-2"
+                    >
+                      {segment.timestamp_formatted}
+                    </a>
+                    <span className="text-gray-700">{segment.content}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
-      </div>
 
-      {/* Tab Content */}
-      <div className="space-y-6">
-        {activeTab === 'overview' && (
-          <div className="card">
-            <h2 className="text-xl font-semibold mb-4">Video Overview</h2>
-            <div className="aspect-video mb-4">
-              <iframe
-                className="w-full h-full rounded-lg"
-                src={youtubeEmbedUrl}
-                frameBorder="0"
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                allowFullScreen
-                title={video.title}
-              ></iframe>
-            </div>
-            {video.summary && (
-              <div>
-                <h3 className="text-lg font-medium mb-2">Summary</h3>
-                <p className="text-gray-700 whitespace-pre-wrap">{video.summary}</p>
-              </div>
-            )}
-          </div>
-        )}
-
-        {activeTab === 'chat' && (
-          <div className="flex gap-4 h-[800px]">
-            {/* Left: Video Player */}
-            <div className="w-1/2 border rounded-lg overflow-hidden bg-black shadow-lg relative flex flex-col">
-              {/* Player container */}
-              <div className="flex-1">
-                <div id="youtube-player-chat" className="w-full h-full"></div>
-              </div>
-
-              {/* Current time display */}
-              <div className="bg-gray-900 text-white px-4 py-2 text-sm">
-                Current Time: {formatSeconds(currentTime)} / {formatSeconds(video.duration_seconds)}
-              </div>
-            </div>
-
-            {/* Right: Chat */}
-            <div className="w-1/2">
-              <DocumentChatImproved
-                docId={videoId!}
-                documentTitle={video.title}
-                onTimestampClick={jumpToTimestamp}
-                isVideo={true}
-              />
-            </div>
-          </div>
-        )}
-
-        {activeTab === 'transcript' && (
-          <div className="card">
-            <h2 className="text-xl font-semibold mb-4">Full Transcript</h2>
-            <div className="space-y-3">
-              {transcript.map((segment, index) => (
-                <p key={index} className="text-gray-700 hover:bg-gray-50 p-2 rounded transition-colors">
-                  <button
-                    onClick={() => jumpToTimestamp(segment.timestamp)}
-                    className="text-blue-600 hover:underline font-medium mr-2 cursor-pointer"
-                  >
-                    {segment.timestamp_formatted}
-                  </button>
-                  {segment.text}
-                </p>
-              ))}
-            </div>
-          </div>
-        )}
+        {/* Right: Chat */}
+        <div className="w-1/2">
+          <DocumentChatImproved
+            docId={videoId!}
+            documentTitle={video.title}
+            isVideo={true}
+          />
+        </div>
       </div>
     </div>
   );

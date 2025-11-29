@@ -31,7 +31,7 @@ google-auth-httplib2>=0.2.0
 google-api-python-client>=2.114.0
 
 # YouTube video processing (NEW!)
-yt-dlp>=2024.3.10
+yt-dlp>=2025.11.12
 ffmpeg-python>=0.2.0
 
 # Note: ffmpeg binary must be installed separately

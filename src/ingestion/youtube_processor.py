@@ -84,7 +84,8 @@ class YouTubeProcessor:
         print(f"📥 Downloading YouTube video: {url}")
 
         ydl_opts = {
-            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+            # Let yt-dlp automatically select the best format (no manual selector)
+            # This is more reliable and works with all YouTube videos
             'outtmpl': f'{self.output_dir}/%(id)s.%(ext)s',
             'quiet': False,
             'no_warnings': False,
@@ -101,6 +102,10 @@ class YouTubeProcessor:
         playlist_id = info.get('playlist_id')
         playlist_index = info.get('playlist_index')
 
+        # Determine actual file extension (yt-dlp may download as webm, mp4, mkv, etc.)
+        video_ext = info.get('ext', 'webm')  # Default to webm as that's common now
+        actual_filepath = f"{self.output_dir}/{info['id']}.{video_ext}"
+
         result = {
             'youtube_id': info['id'],
             'title': info['title'],
@@ -108,14 +113,14 @@ class YouTubeProcessor:
             'channel': info.get('channel', info.get('uploader', 'Unknown')),
             'description': info.get('description', ''),
             'thumbnail': info.get('thumbnail', ''),
-            'filepath': f"{self.output_dir}/{info['id']}.mp4",
+            'filepath': actual_filepath,
             'playlist_id': playlist_id,
             'playlist_index': playlist_index,
             'upload_date': info.get('upload_date'),
             'view_count': info.get('view_count'),
         }
 
-        print(f"✓ Downloaded: {result['title']} ({result['duration']}s)")
+        print(f"✓ Downloaded: {result['title']} ({result['duration']}s) as {video_ext}")
         return result
 
     def extract_audio(self, video_path: str) -> str:
@@ -124,7 +129,10 @@ class YouTubeProcessor:
 
         Outputs 16kHz mono WAV (optimal for Whisper API).
         """
-        audio_path = video_path.replace('.mp4', '.wav')
+        # Handle any video format (.mp4, .webm, .mkv, etc.)
+        import os
+        video_ext = os.path.splitext(video_path)[1]
+        audio_path = video_path.replace(video_ext, '.wav')
 
         print(f"🔊 Extracting audio: {video_path}")
 
@@ -162,14 +170,22 @@ class YouTubeProcessor:
         print(f"🎤 Transcribing with Whisper API...")
 
         # Check file size (Whisper API limit is 25MB)
+        MAX_SIZE = 25 * 1024 * 1024
         file_size = os.path.getsize(audio_path)
-        if file_size > 25 * 1024 * 1024:
+
+        if file_size > MAX_SIZE:
             print(f"⚠️  Audio file too large ({file_size / 1024 / 1024:.1f}MB). Compressing...")
             audio_path = self._compress_audio(audio_path)
 
+            # Check if compressed file is still too large
+            compressed_size = os.path.getsize(audio_path)
+            if compressed_size > MAX_SIZE:
+                print(f"⚠️  Compressed file still too large ({compressed_size / 1024 / 1024:.1f}MB). Splitting into chunks...")
+                return self._transcribe_in_chunks(audio_path)
+
         with open(audio_path, 'rb') as audio_file:
             transcript = self.client.audio.transcriptions.create(
-                model="whisper-1",
+                model=os.getenv('WHISPER_MODEL', 'whisper-1'),
                 file=audio_file,
                 response_format="verbose_json",
                 timestamp_granularities=["segment"]
@@ -179,29 +195,99 @@ class YouTubeProcessor:
         for i, seg in enumerate(transcript.segments):
             segments.append({
                 'segment_index': i,
-                'start_time': seg['start'],
-                'end_time': seg['end'],
-                'text': seg['text'].strip()
+                'start_time': seg.start,
+                'end_time': seg.end,
+                'text': seg.text.strip()
             })
 
         print(f"✓ Transcribed {len(segments)} segments")
         return segments
 
-    def _compress_audio(self, audio_path: str) -> str:
-        """Compress audio file to fit Whisper API limit."""
-        compressed_path = audio_path.replace('.wav', '_compressed.wav')
+    def _transcribe_in_chunks(self, audio_path: str) -> List[Dict]:
+        """Split audio into chunks and transcribe each separately."""
+        import math
 
+        # Get audio duration
+        probe_cmd = [
+            'ffprobe',
+            '-v', 'error',
+            '-show_entries', 'format=duration',
+            '-of', 'default=noprint_wrappers=1:nokey=1',
+            audio_path
+        ]
+        result = subprocess.run(probe_cmd, capture_output=True, text=True)
+        duration = float(result.stdout.strip())
+
+        # Split into ~20 minute chunks (safe for 25MB limit with 32k bitrate)
+        chunk_duration = 20 * 60  # 20 minutes
+        num_chunks = math.ceil(duration / chunk_duration)
+
+        print(f"📊 Splitting {duration/60:.1f} min audio into {num_chunks} chunks...")
+
+        all_segments = []
+
+        for i in range(num_chunks):
+            start_time = i * chunk_duration
+            chunk_path = audio_path.replace('.wav', f'_chunk{i}.wav')
+
+            # Extract chunk
+            cmd = [
+                'ffmpeg',
+                '-i', audio_path,
+                '-ss', str(start_time),
+                '-t', str(chunk_duration),
+                '-ar', '16000',
+                '-ac', '1',
+                '-y',
+                chunk_path
+            ]
+            subprocess.run(cmd, capture_output=True, check=True)
+
+            # Transcribe chunk
+            print(f"  Transcribing chunk {i+1}/{num_chunks}...")
+            with open(chunk_path, 'rb') as audio_file:
+                transcript = self.client.audio.transcriptions.create(
+                    model=os.getenv('WHISPER_MODEL', 'whisper-1'),
+                    file=audio_file,
+                    response_format="verbose_json",
+                    timestamp_granularities=["segment"]
+                )
+
+            # Adjust timestamps and add to all_segments
+            for seg in transcript.segments:
+                all_segments.append({
+                    'segment_index': len(all_segments),
+                    'start_time': seg.start + start_time,
+                    'end_time': seg.end + start_time,
+                    'text': seg.text.strip()
+                })
+
+            # Clean up chunk file
+            os.remove(chunk_path)
+
+        print(f"✓ Transcribed {len(all_segments)} segments from {num_chunks} chunks")
+        return all_segments
+
+    def _compress_audio(self, audio_path: str) -> str:
+        """Compress audio file to fit Whisper API limit (25MB)."""
+        compressed_path = audio_path.replace('.wav', '_compressed.mp3')
+
+        # Use MP3 format for actual compression (WAV is uncompressed)
         cmd = [
             'ffmpeg',
             '-i', audio_path,
-            '-ar', '16000',
-            '-ac', '1',
-            '-b:a', '64k',  # Lower bitrate
+            '-ar', '16000',  # 16kHz sample rate (required by Whisper)
+            '-ac', '1',      # Mono
+            '-b:a', '32k',   # Lower bitrate (32k) - good quality for speech
+            '-acodec', 'libmp3lame',  # MP3 codec for compression
             '-y',
             compressed_path
         ]
 
-        subprocess.run(cmd, capture_output=True, check=True)
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"Audio compression failed: {result.stderr}")
+
         return compressed_path
 
     def extract_screenshots(
@@ -417,7 +503,7 @@ Return ONLY valid JSON (no markdown, no explanation):
 
         try:
             response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
+                model=os.getenv('DOC_SUMMARY_MODEL', 'gpt-4o-mini'),
                 messages=[{"role": "user", "content": prompt}],
                 response_format={"type": "json_object"},
                 temperature=0.3

@@ -57,8 +57,9 @@ export default function DocumentChatImproved({
   const [selectedCitation, setSelectedCitation] = useState<Citation | null>(null);
   const [copiedMessageIndex, setCopiedMessageIndex] = useState<number | null>(null);
   const [expandedCitations, setExpandedCitations] = useState<Set<number>>(new Set());
+  // When viewing a specific doc/video, ground chat to ONLY that content type
   const [selectedSourceType, setSelectedSourceType] = useState<'all' | 'pdf' | 'youtube'>(
-    docId ? (documentTitle.includes("Video") ? 'youtube' : 'pdf') : 'all'
+    docId ? (isVideo ? 'youtube' : 'pdf') : 'all'
   );
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
