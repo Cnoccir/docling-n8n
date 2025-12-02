@@ -497,9 +497,10 @@ def process_youtube_video(
         }
 
     except Exception as e:
+        import traceback as tb
         error_msg = str(e)
         print(f"\n❌ ERROR: {error_msg}")
-        print(traceback.format_exc())
+        print(tb.format_exc())
 
         # Update job status
         with db.conn.cursor() as cur:

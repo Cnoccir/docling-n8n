@@ -98,6 +98,11 @@ class YouTubeProcessor:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
 
+        # Handle playlists - get first video entry if this is a playlist
+        if 'entries' in info and info['entries']:
+            # This is a playlist, get the first video
+            info = info['entries'][0]
+
         # Extract playlist info if available
         playlist_id = info.get('playlist_id')
         playlist_index = info.get('playlist_index')
