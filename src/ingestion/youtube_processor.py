@@ -109,7 +109,7 @@ class YouTubeProcessor:
         result = {
             'youtube_id': info['id'],
             'title': info['title'],
-            'duration': info['duration'],
+            'duration': info.get('duration', 0),
             'channel': info.get('channel', info.get('uploader', 'Unknown')),
             'description': info.get('description', ''),
             'thumbnail': info.get('thumbnail', ''),
@@ -120,7 +120,8 @@ class YouTubeProcessor:
             'view_count': info.get('view_count'),
         }
 
-        print(f"✓ Downloaded: {result['title']} ({result['duration']}s) as {video_ext}")
+        duration_str = f"{result['duration']}s" if result['duration'] else "unknown duration"
+        print(f"✓ Downloaded: {result['title']} ({duration_str}) as {video_ext}")
         return result
 
     def extract_audio(self, video_path: str) -> str:

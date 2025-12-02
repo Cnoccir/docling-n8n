@@ -24,7 +24,7 @@ from app.utils.conversation_manager import (
 
 # NEW: Import improvements
 from app.utils.answer_verifier import quick_verify
-from app.utils.adaptive_retrieval import adaptive_retrieval_params, needs_multi_hop_reasoning as check_multi_hop
+from app.utils.adaptive_retrieval import adaptive_retrieval_params, needs_multi_hop as check_multi_hop
 from app.utils.query_cache import QueryCache
 from app.utils.conversation_manager_enhanced import format_chat_history_with_summary
 from app.utils.multi_hop_retriever import multi_hop_retrieve
