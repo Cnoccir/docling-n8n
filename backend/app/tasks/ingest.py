@@ -19,6 +19,7 @@ from ingestion.hierarchy_builder_v2 import HierarchyBuilderV2
 from ingestion.image_processor import ImageProcessor
 from ingestion.table_processor import TableProcessor
 from ingestion.document_summarizer import DocumentSummarizer
+from ingestion.topic_tagger import TopicTagger  # NEW: Phase 2
 from utils.embeddings import EmbeddingGenerator
 from gdrive_uploader import GDriveUploader
 import hashlib
@@ -149,6 +150,7 @@ def process_document(self, job_id: str, file_path: str, doc_id: str, filename: s
         table_processor = TableProcessor()
         summarizer = DocumentSummarizer()
         embedding_gen = EmbeddingGenerator()
+        topic_tagger = TopicTagger()  # NEW: Phase 2
 
         # Step 1: Parse PDF (0-15%) - CHECKPOINT
         doc_json = checkpoint.get_parsed_doc()
@@ -316,9 +318,16 @@ def process_document(self, job_id: str, file_path: str, doc_id: str, filename: s
             for img in images:
                 # Extract section_id from asset_index
                 section_id = None
+                section_title = None
                 if asset_index and 'images' in asset_index:
                     img_asset = asset_index['images'].get(img.id, {})
                     section_id = img_asset.get('section_id')
+                    section_title = img_asset.get('section_title')
+                
+                # NEW Phase 2: Tag image with topics
+                image_text = f"{img.caption or ''} {img.basic_summary or ''}".strip()
+                topics = topic_tagger.tag_content(image_text, section_title) if image_text else []
+                primary_topic = topics[0] if topics else None
 
                 image_dicts.append({
                     'id': img.id,
@@ -333,7 +342,9 @@ def process_document(self, job_id: str, file_path: str, doc_id: str, filename: s
                     'detailed_description': img.detailed_description,
                     'tokens_used': img.tokens_used,
                     'description_generated': img.description_generated,
-                    'section_id': section_id  # NEW: Map from asset_index
+                    'section_id': section_id,  # NEW: Map from asset_index
+                    'topic': primary_topic,  # NEW: Phase 2
+                    'topics': topics  # NEW: Phase 2
                 })
             db.save_images(image_dicts)
         
@@ -343,13 +354,22 @@ def process_document(self, job_id: str, file_path: str, doc_id: str, filename: s
             for tbl in tables:
                 # Extract section_id from asset_index
                 section_id = None
+                section_title = None
                 if asset_index and 'tables' in asset_index:
                     tbl_asset = asset_index['tables'].get(tbl['id'], {})
                     section_id = tbl_asset.get('section_id')
+                    section_title = tbl_asset.get('section_title')
+                
+                # NEW Phase 2: Tag table with topics
+                table_text = f"{tbl.get('title', '')} {tbl.get('description', '')}".strip()
+                topics = topic_tagger.tag_content(table_text, section_title) if table_text else []
+                primary_topic = topics[0] if topics else None
 
                 # Add section_id to table dict
                 tbl_with_section = dict(tbl)  # Create copy
                 tbl_with_section['section_id'] = section_id  # NEW: Map from asset_index
+                tbl_with_section['topic'] = primary_topic  # NEW: Phase 2
+                tbl_with_section['topics'] = topics  # NEW: Phase 2
                 table_dicts.append(tbl_with_section)
 
             db.save_tables(table_dicts)

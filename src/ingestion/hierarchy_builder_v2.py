@@ -9,6 +9,7 @@ sys.path.append('..')
 from database.models import DocumentHierarchy, Section, Page, Chunk
 from openai import OpenAI
 from .pdf_bookmark_extractor import PDFBookmarkExtractor
+from .topic_tagger import TopicTagger
 
 
 class HierarchyBuilderV2:
@@ -17,6 +18,16 @@ class HierarchyBuilderV2:
     def __init__(self):
         self.openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
         self.model = os.getenv('DOC_SUMMARY_MODEL', 'gpt-4o-mini')
+        
+        # Initialize topic tagger (uses LLM if API key available, else rules-based)
+        topic_tagging_enabled = os.getenv('ENABLE_TOPIC_TAGGING', 'true').lower() == 'true'
+        use_llm_for_topics = os.getenv('USE_LLM_TOPIC_TAGGING', 'false').lower() == 'true'
+        
+        if topic_tagging_enabled:
+            self.topic_tagger = TopicTagger(use_llm=use_llm_for_topics)
+        else:
+            self.topic_tagger = None
+            print("⚠️  Topic tagging disabled (set ENABLE_TOPIC_TAGGING=true to enable)")
         
         # Section number patterns for hierarchy detection
         self.section_patterns = [
@@ -530,6 +541,14 @@ class HierarchyBuilderV2:
                 section_level = buffer_section.level
                 parent_section_id = buffer_section.parent_section_id
             
+            # NEW: Tag chunk with topics (Phase 2)
+            topics = []
+            topic = None
+            if self.topic_tagger:
+                section_title = buffer_section.title if buffer_section else "Unknown"
+                topics = self.topic_tagger.tag_chunk(content, section_title)
+                topic = topics[0] if topics else "other"
+            
             chunk = Chunk(
                 id=chunk_id,
                 doc_id=doc_id,
@@ -540,7 +559,9 @@ class HierarchyBuilderV2:
                 section_id=buffer_section.id if buffer_section else None,
                 parent_section_id=parent_section_id,
                 section_path=section_path,
-                section_level=section_level
+                section_level=section_level,
+                topics=topics,  # NEW: Topic classification
+                topic=topic  # NEW: Primary topic
             )
             
             # Update section

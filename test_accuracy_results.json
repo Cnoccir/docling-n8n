@@ -1,0 +1,223 @@
+{
+  "timestamp": "2025-12-02T03:45:30.936082",
+  "summary": {
+    "total_tests": 5,
+    "cache_hit_rate": 0.6,
+    "category_accuracy": 1.0,
+    "complexity_accuracy": 0.4,
+    "ground_truth_coverage": 0.08,
+    "avg_retrieval_score": 0.21205312496348278
+  },
+  "detailed_results": [
+    {
+      "test_id": "q1_simple_definition",
+      "question": "What is System Database in Niagara?",
+      "timestamp": "2025-12-02T03:45:14.423153",
+      "categories": [
+        "architecture"
+      ],
+      "category_match": true,
+      "rewritten_query": "What is the System Database in Niagara 4 for BAS/HVAC architecture, including its role in multi-tier network topology and enterprise supervisor integration?",
+      "complexity": "moderate",
+      "top_k": 5,
+      "context_window": 2,
+      "complexity_match": false,
+      "top_k_match": false,
+      "cache_hit": true,
+      "answer": "Welcome to the third Tridium talk on Niagara 4.6 new features. My name is Rick Wisensdale. I'm with the product marketing team. And here with me is Scott Hoy, the principal engineer for our topic toda",
+      "citations": [
+        {
+          "content": "Welcome to the third Tridium talk on Niagara 4.6 new features. My name is Rick Wisensdale. I'm with ",
+          "doc_title": null,
+          "page_number": null,
+          "section_path": null,
+          "similarity_score": null
+        },
+        {
+          "content": "enables a Niagara supervisor to examine all of the data, excuse me, all the devices in the Niagara n",
+          "doc_title": null,
+          "page_number": null,
+          "section_path": null,
+          "similarity_score": null
+        },
+        {
+          "content": "and we have the same collection of tag dictionaries. And our supervisor already have three stations ",
+          "doc_title": null,
+          "page_number": null,
+          "section_path": null,
+          "similarity_score": null
+        }
+      ],
+      "tokens_saved": 1500
+    },
+    {
+      "test_id": "q2_procedural",
+      "question": "How do I configure a multi-tier architecture with System Database?",
+      "timestamp": "2025-12-02T03:45:18.072135",
+      "categories": [
+        "architecture",
+        "configuration"
+      ],
+      "category_match": true,
+      "rewritten_query": "Configure multi-tier architecture with System Database in Niagara 4 for BAS/HVAC building automation.",
+      "complexity": "moderate",
+      "top_k": 5,
+      "context_window": 2,
+      "complexity_match": true,
+      "top_k_match": true,
+      "cache_hit": true,
+      "answer": "Before the introduction of system database service, the system designer would have quite a lot of work to do with respect to getting a fully tested individual remote station end user experience to be ",
+      "citations": [
+        {
+          "content": "Before the introduction of system database service, the system designer would have quite a lot of wo",
+          "doc_title": null,
+          "page_number": null,
+          "section_path": null,
+          "similarity_score": null
+        },
+        {
+          "content": "settings, and the tenant related HVAC systems. So first, we'll look at things to consider if you wan",
+          "doc_title": null,
+          "page_number": null,
+          "section_path": null,
+          "similarity_score": null
+        },
+        {
+          "content": "through a virtual instance of the schedule with a new view we designed that allows you to actually e",
+          "doc_title": null,
+          "page_number": null,
+          "section_path": null,
+          "similarity_score": null
+        }
+      ],
+      "tokens_saved": 1500
+    },
+    {
+      "test_id": "q3_comparison",
+      "question": "What's the difference between System Database and traditional point-to-point configuration, and which should I use for a multi-tier setup?",
+      "timestamp": "2025-12-02T03:45:20.626986",
+      "categories": [
+        "architecture",
+        "configuration"
+      ],
+      "category_match": true,
+      "rewritten_query": "Difference between System Database and traditional point-to-point configuration in Niagara 4 for multi-tier BAS/HVAC architecture; recommendations for optimal configuration setup.",
+      "complexity": "moderate",
+      "top_k": 5,
+      "context_window": 2,
+      "complexity_match": false,
+      "top_k_match": false,
+      "cache_hit": true,
+      "answer": "Before the introduction of system database service, the system designer would have quite a lot of work to do with respect to getting a fully tested individual remote station end user experience to be ",
+      "citations": [
+        {
+          "content": "Before the introduction of system database service, the system designer would have quite a lot of wo",
+          "doc_title": null,
+          "page_number": null,
+          "section_path": null,
+          "similarity_score": null
+        },
+        {
+          "content": "enables a Niagara supervisor to examine all of the data, excuse me, all the devices in the Niagara n",
+          "doc_title": null,
+          "page_number": null,
+          "section_path": null,
+          "similarity_score": null
+        },
+        {
+          "content": "settings, and the tenant related HVAC systems. So first, we'll look at things to consider if you wan",
+          "doc_title": null,
+          "page_number": null,
+          "section_path": null,
+          "similarity_score": null
+        }
+      ],
+      "tokens_saved": 1500
+    },
+    {
+      "test_id": "q4_troubleshooting",
+      "question": "My JACE is showing 'System Database sync failed' alarm. How do I diagnose and fix this?",
+      "timestamp": "2025-12-02T03:45:24.726201",
+      "categories": [
+        "troubleshooting"
+      ],
+      "category_match": true,
+      "rewritten_query": "Diagnose and resolve 'System Database sync failed' alarm on JACE controller in Niagara 4 BAS/HVAC system. Focus on diagnostics, fault codes, and error resolution procedures.",
+      "complexity": "complex",
+      "top_k": 8,
+      "context_window": 4,
+      "complexity_match": false,
+      "top_k_match": false,
+      "cache_hit": false,
+      "retrieved_chunks": 8,
+      "top_score": 0.218684889391687,
+      "avg_score": 0.18746024384492,
+      "topics_found": [
+        "graphics",
+        "system_database"
+      ],
+      "answer": "Then I created a JACE 8000 station from the spreadsheets. During this system database service presentation, I'll be utilizing that same JACE 8000 station I created and additional JACE 8000 stations cr",
+      "citations": [
+        {
+          "content": "Then I created a JACE 8000 station from the spreadsheets. During this system database service presen",
+          "page": 2
+        },
+        {
+          "content": "through a virtual instance of the schedule with a new view we designed that allows you to actually e",
+          "page": 10
+        },
+        {
+          "content": "that are on that station and import them into my supervisor. And after doing the import, I'll pick a",
+          "page": 8
+        }
+      ],
+      "ground_truth_coverage": 0.0,
+      "keywords_found": []
+    },
+    {
+      "test_id": "q5_graphics",
+      "question": "How do PX graphics integrate with System Database tags?",
+      "timestamp": "2025-12-02T03:45:28.017747",
+      "categories": [
+        "graphics",
+        "integration"
+      ],
+      "category_match": true,
+      "rewritten_query": "How do Niagara PX graphics integrate with System Database tags in BAS/HVAC systems?",
+      "complexity": "moderate",
+      "top_k": 5,
+      "context_window": 2,
+      "complexity_match": true,
+      "top_k_match": true,
+      "cache_hit": false,
+      "retrieved_chunks": 5,
+      "top_score": 0.271868613735605,
+      "avg_score": 0.23664600608204558,
+      "topics_found": [
+        "multi_tier_architecture",
+        "graphics",
+        "system_database"
+      ],
+      "answer": "we talked about entities. Entities are basically components that you have in the remote stations, the JACE stations. So information about those entities, such as their tags and relations, is what woul",
+      "citations": [
+        {
+          "content": "we talked about entities. Entities are basically components that you have in the remote stations, th",
+          "page": 26
+        },
+        {
+          "content": "And then, so then the next time you go view that file on the supervisor on the virtual, it will be u",
+          "page": 25
+        },
+        {
+          "content": "and enable the import PX files on demand. What this will do is, as I'm selecting the virtual compone",
+          "page": 9
+        }
+      ],
+      "ground_truth_coverage": 0.4,
+      "keywords_found": [
+        "PX",
+        "tags"
+      ]
+    }
+  ]
+}

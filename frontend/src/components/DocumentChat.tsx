@@ -3,6 +3,7 @@ import { Send, BookOpen, Loader2, ExternalLink } from 'lucide-react';
 import axios from 'axios';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { MarkdownRenderer } from './MarkdownRenderer';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
 
@@ -169,36 +170,13 @@ export default function DocumentChat({ docId, documentTitle, onPageChange }: Doc
               }`}
             >
               {message.role === 'assistant' ? (
-                <div className="prose prose-sm max-w-none prose-headings:font-bold prose-headings:text-gray-900 prose-h1:text-xl prose-h2:text-lg prose-h3:text-base prose-p:text-gray-800 prose-p:leading-relaxed prose-strong:text-gray-900 prose-strong:font-bold prose-ul:text-gray-800 prose-ol:text-gray-800 prose-li:text-gray-800 prose-li:my-1 prose-a:text-blue-600 hover:prose-a:text-blue-700 prose-code:text-blue-600 prose-code:bg-blue-50 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:font-mono prose-code:text-xs prose-pre:bg-gray-900 prose-pre:text-gray-100 prose-table:text-sm prose-table:border-collapse prose-th:border prose-th:border-gray-300 prose-th:bg-gray-100 prose-th:px-3 prose-th:py-2 prose-td:border prose-td:border-gray-300 prose-td:px-3 prose-td:py-2">
-                  <ReactMarkdown
-                    remarkPlugins={[remarkGfm]}
-                    components={{
-                      // Make citation numbers clickable
-                      a: ({ node, ...props }) => {
-                        const text = props.children?.toString() || '';
-                        // Check if it's a citation link (format: [1], [2], etc.)
-                        const citationMatch = text.match(/^\[(\d+)\]$/);
-                        if (citationMatch && message.citations) {
-                          const citationIndex = parseInt(citationMatch[1]) - 1;
-                          const citation = message.citations[citationIndex];
-                          if (citation) {
-                            return (
-                              <button
-                                onClick={() => handleCitationClick(citation)}
-                                className="text-blue-600 hover:text-blue-800 font-semibold underline cursor-pointer"
-                              >
-                                {text}
-                              </button>
-                            );
-                          }
-                        }
-                        return <a {...props} />;
-                      },
-                    }}
-                  >
-                    {message.content}
-                  </ReactMarkdown>
-                </div>
+                <MarkdownRenderer
+                  content={message.content}
+                  onCitationClick={(index) => {
+                    const citation = message.citations?.[index];
+                    if (citation) handleCitationClick(citation);
+                  }}
+                />
               ) : (
                 <p className="whitespace-pre-wrap">{message.content}</p>
               )}

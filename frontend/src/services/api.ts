@@ -279,6 +279,7 @@ export const unifiedChatApi = {
     use_images?: boolean;
     semantic_weight?: number;
     keyword_weight?: number;
+    chat_history?: Array<{ role: string; content: string }>;
   }): Promise<{
     answer: string;
     citations: Array<{
@@ -299,6 +300,14 @@ export const unifiedChatApi = {
     total_sources_found: number;
     model_used: string;
     tokens_used: number;
+    related_images?: Array<{
+      url: string;
+      caption?: string;
+      image_type?: string;
+      page_number?: number;
+      timestamp?: number;
+    }>;
+    follow_up_suggestions?: string[];
   }> => {
     const { data } = await api.post('/chat/unified/', {
       question: params.question,
@@ -308,6 +317,7 @@ export const unifiedChatApi = {
       use_images: params.use_images || false,
       semantic_weight: params.semantic_weight || 0.5,
       keyword_weight: params.keyword_weight || 0.5,
+      chat_history: params.chat_history || [],
     });
     return data;
   },

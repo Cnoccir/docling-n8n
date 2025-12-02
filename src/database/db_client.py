@@ -174,7 +174,9 @@ class DatabaseClient:
                 chunk.section_path if hasattr(chunk, 'section_path') else None,
                 chunk.section_level if hasattr(chunk, 'section_level') else None,
                 chunk.element_type,
-                json.dumps(chunk.metadata)
+                json.dumps(chunk.metadata),
+                chunk.topic if hasattr(chunk, 'topic') else None,  # NEW: Phase 2
+                chunk.topics if hasattr(chunk, 'topics') else []  # NEW: Phase 2
             ))
         
         with self.conn.cursor() as cur:
@@ -184,13 +186,13 @@ class DatabaseClient:
                 INSERT INTO chunks (
                     id, doc_id, content, embedding, page_number, bbox,
                     section_id, parent_section_id, section_path, section_level,
-                    element_type, metadata
+                    element_type, metadata, topic, topics
                 )
                 VALUES %s
                 ON CONFLICT (id) DO NOTHING
                 """,
                 values,
-                template="(%s, %s, %s, %s::vector, %s, %s, %s, %s, %s, %s, %s, %s)"
+                template="(%s, %s, %s, %s::vector, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
             )
             self.conn.commit()
     
@@ -260,6 +262,49 @@ class DatabaseClient:
                     %s::vector, %s, %s, %s, %s, 0.0, %s
                 )
             """, (query_embedding, query_text, doc_id, semantic_weight, keyword_weight, top_k))
+            return cur.fetchall()
+    
+    def search_chunks_hybrid_with_topics(
+        self,
+        query_embedding: List[float],
+        query_text: str,
+        doc_id: Optional[str] = None,
+        include_topics: Optional[List[str]] = None,
+        exclude_topics: Optional[List[str]] = None,
+        semantic_weight: float = 0.5,
+        keyword_weight: float = 0.5,
+        top_k: int = 5
+    ) -> List[Dict[str, Any]]:
+        """Hybrid search with topic filtering and boosting (Phase 3).
+        
+        Args:
+            query_embedding: Vector embedding of the query
+            query_text: Raw query text for keyword search
+            doc_id: Optional document ID filter
+            include_topics: Topics to filter/boost (e.g., ['system_database', 'graphics'])
+            exclude_topics: Topics to exclude (e.g., ['provisioning'])
+            semantic_weight: Weight for semantic similarity (default 0.5)
+            keyword_weight: Weight for keyword matching (default 0.5)
+            top_k: Number of results to return
+            
+        Returns:
+            List of chunks with semantic_score, keyword_score, topic_boost, final_score
+        """
+        with self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT * FROM search_chunks_hybrid_with_topics(
+                    %s::vector, %s, %s, %s, %s, %s, %s, %s
+                )
+            """, (
+                query_embedding, 
+                query_text, 
+                doc_id, 
+                include_topics,
+                exclude_topics,
+                semantic_weight, 
+                keyword_weight, 
+                top_k
+            ))
             return cur.fetchall()
     
     # ==================== Hierarchy Operations ====================
@@ -357,7 +402,9 @@ class DatabaseClient:
                 img.get('detailed_description'),
                 img.get('tokens_used', 0),
                 img.get('description_generated', False),
-                img.get('section_id')  # NEW: section_id for hierarchy
+                img.get('section_id'),  # NEW: section_id for hierarchy
+                img.get('topic'),  # NEW: Phase 2
+                img.get('topics', [])  # NEW: Phase 2
             )
             for img in images
         ]
@@ -370,7 +417,7 @@ class DatabaseClient:
                     id, doc_id, chunk_id, page_number, bbox, s3_url,
                     caption, ocr_text, image_type, basic_summary,
                     detailed_description, tokens_used, description_generated,
-                    section_id
+                    section_id, topic, topics
                 )
                 VALUES %s
                 ON CONFLICT (id) DO NOTHING
@@ -416,7 +463,9 @@ class DatabaseClient:
                 tbl.get('title'),
                 tbl['description'],
                 json.dumps(tbl.get('key_insights', [])),
-                tbl.get('section_id')  # NEW: section_id for hierarchy
+                tbl.get('section_id'),  # NEW: section_id for hierarchy
+                tbl.get('topic'),  # NEW: Phase 2
+                tbl.get('topics', [])  # NEW: Phase 2
             )
             for tbl in tables
         ]
@@ -428,7 +477,7 @@ class DatabaseClient:
                 INSERT INTO document_tables (
                     id, doc_id, page_number, bbox, raw_html, markdown,
                     structured_data, title, description, key_insights,
-                    section_id
+                    section_id, topic, topics
                 )
                 VALUES %s
                 ON CONFLICT (id) DO NOTHING

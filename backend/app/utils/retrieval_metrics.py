@@ -168,7 +168,10 @@ class RetrievalMetrics:
             return 0.0
 
         # Map query categories to topics
-        from backend.app.api.chat_multimodal import CATEGORY_TO_TOPIC_MAP
+        import sys
+        from pathlib import Path
+        sys.path.insert(0, str(Path(__file__).parent))
+        from topic_constants import CATEGORY_TO_TOPIC_MAP
 
         expected_topics = set()
         for category in query_categories:

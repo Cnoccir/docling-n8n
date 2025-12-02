@@ -7,8 +7,8 @@ interface LayoutProps {
 }
 
 const navigation = [
+  { name: 'TechAssist', href: '/search', icon: Search },
   { name: 'Dashboard', href: '/', icon: Home },
-  { name: 'Unified Search', href: '/search', icon: Search },
   { name: 'Upload', href: '/upload', icon: Upload },
   { name: 'Queue', href: '/queue', icon: Activity },
   { name: 'Documents', href: '/documents', icon: FileText },
@@ -31,9 +31,9 @@ export default function Layout({ children }: LayoutProps) {
               </div>
               <div>
                 <h1 className="text-xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-                  AME Knowledge
+                  AME TechAssist
                 </h1>
-                <p className="text-xs text-gray-600 font-medium">Technical Library</p>
+                <p className="text-xs text-gray-600 font-medium">Technical Expert System</p>
               </div>
             </div>
           </div>
@@ -84,7 +84,7 @@ export default function Layout({ children }: LayoutProps) {
             </a>
 
             <p className="text-xs text-gray-500 text-center">
-              AME Knowledge v2.0 • Powered by AI
+              AME TechAssist v2.0 • AI Technical Expert
             </p>
           </div>
         </div>

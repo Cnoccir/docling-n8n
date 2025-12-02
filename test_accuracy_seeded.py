@@ -17,8 +17,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from database.db_client import DatabaseClient
-from utils.embeddings import EmbeddingGenerator
+from src.database.db_client import DatabaseClient
+from src.utils.embeddings import EmbeddingGenerator
 from backend.app.utils.query_classifier import classify_query
 from backend.app.utils.query_rewriter import rewrite_query
 from backend.app.utils.adaptive_retrieval import adaptive_retrieval_params

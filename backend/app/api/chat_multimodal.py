@@ -9,8 +9,8 @@ from openai import OpenAI
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src'))
 
-from database.db_client import DatabaseClient
-from utils.embeddings import EmbeddingGenerator
+from src.database.db_client import DatabaseClient
+from src.utils.embeddings import EmbeddingGenerator
 from app.utils.cost_tracker import CostTracker
 from app.utils.query_classifier import classify_query
 from app.utils.query_rewriter import rewrite_query
@@ -28,7 +28,7 @@ from app.utils.adaptive_retrieval import adaptive_retrieval_params, needs_multi_
 from app.utils.query_cache import QueryCache
 from app.utils.conversation_manager_enhanced import format_chat_history_with_summary
 from app.utils.multi_hop_retriever import multi_hop_retrieve
-from app.utils.retrieval_metrics import Retrieval Metrics
+from app.utils.retrieval_metrics import RetrievalMetrics
 
 router = APIRouter()
 
@@ -40,18 +40,8 @@ retrieval_metrics = RetrievalMetrics(db_client=None)
 
 
 
-# NEW: Phase 3 - Map query categories to topic filters
-CATEGORY_TO_TOPIC_MAP = {
-    'architecture': ['system_database', 'multi_tier_architecture'],
-    'graphics': ['graphics'],
-    'provisioning': ['provisioning'],
-    'troubleshooting': ['troubleshooting'],
-    'configuration': ['configuration'],
-    'hardware': ['hardware'],
-    'hvac': ['hvac_systems'],
-    'energy': ['energy_management'],
-    'integration': ['integration']
-}
+# NEW: Phase 3 - Import topic mapping
+from app.utils.topic_constants import CATEGORY_TO_TOPIC_MAP
 
 def map_categories_to_topics(categories: List[str]) -> List[str]:
     """Map query categories to relevant topic list for boosting.

@@ -20,6 +20,10 @@ class Chunk:
     section_path: Optional[List[str]] = None  # Full path like ['Chapter 1', 'Section 1.1']
     section_level: Optional[int] = None  # Section depth (0=root, 1=chapter, 2=section, etc.)
     
+    # Phase 2: Topic classification for topic-aware retrieval
+    topic: Optional[str] = None  # Primary topic (e.g., 'system_database', 'graphics', 'provisioning')
+    topics: List[str] = field(default_factory=list)  # All applicable topics (multi-label)
+    
     # Optional fields
     bbox: Optional[Dict[str, Any]] = None
     element_type: str = "text"

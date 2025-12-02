@@ -19,6 +19,12 @@ router = APIRouter()
 openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 
 
+class ChatHistoryMessage(BaseModel):
+    """Chat history message for conversation context."""
+    role: Literal['user', 'assistant']
+    content: str
+
+
 class UnifiedChatRequest(BaseModel):
     """Multi-source chat request."""
     question: str
@@ -28,6 +34,7 @@ class UnifiedChatRequest(BaseModel):
     use_images: bool = False  # Include screenshots/images in context
     semantic_weight: float = 0.5
     keyword_weight: float = 0.5
+    chat_history: List[ChatHistoryMessage] = []  # Conversation history for follow-ups
 
 
 class PDFCitation(BaseModel):
@@ -74,7 +81,8 @@ class UnifiedChatResponse(BaseModel):
     total_sources_found: int
     model_used: str
     tokens_used: int
-    related_images: List[RelatedImage] = []  # NEW: Images relevant to the answer
+    related_images: List[RelatedImage] = []  # Images relevant to the answer
+    follow_up_suggestions: List[str] = []  # Suggested follow-up questions
 
 
 def format_timestamp(seconds: float) -> str:
@@ -82,6 +90,49 @@ def format_timestamp(seconds: float) -> str:
     minutes = int(seconds // 60)
     secs = int(seconds % 60)
     return f"{minutes}:{secs:02d}"
+
+
+def generate_follow_up_suggestions(question: str, answer: str, query_type: str, citations: list) -> List[str]:
+    """Generate contextual follow-up suggestions based on the query and response."""
+    suggestions = []
+    question_lower = question.lower()
+    
+    # Base suggestions by query type
+    if query_type == 'definition' or 'what is' in question_lower or 'what are' in question_lower:
+        suggestions.append("How do I configure this?")
+        suggestions.append("Show me a step-by-step setup procedure")
+        suggestions.append("What are common issues with this?")
+    
+    elif query_type == 'example' or 'how to' in question_lower or 'how do' in question_lower:
+        suggestions.append("What if this doesn't work?")
+        suggestions.append("Are there alternative approaches?")
+        suggestions.append("Show me the verification steps")
+    
+    elif query_type == 'troubleshooting' or any(w in question_lower for w in ['error', 'issue', 'problem', 'not working']):
+        suggestions.append("What are other possible causes?")
+        suggestions.append("How do I prevent this in the future?")
+        suggestions.append("Show me the diagnostic steps")
+    
+    elif query_type == 'comparison' or 'vs' in question_lower or 'difference' in question_lower:
+        suggestions.append("Which one should I use for my setup?")
+        suggestions.append("How do I migrate from one to the other?")
+        suggestions.append("What are the performance implications?")
+    
+    else:
+        # General follow-ups
+        suggestions.append("Can you show me the implementation steps?")
+        suggestions.append("What related topics should I know about?")
+        suggestions.append("Are there any common pitfalls?")
+    
+    # Add citation-based suggestions if we have specific sources
+    if citations:
+        # Get unique document titles
+        doc_titles = list(set(c.doc_title for c in citations[:3] if hasattr(c, 'doc_title')))
+        if doc_titles:
+            suggestions.append(f"Tell me more from {doc_titles[0][:40]}...")
+    
+    # Limit to 3 suggestions
+    return suggestions[:3]
 
 
 def detect_document_type(doc_title: str, content_sample: str = "") -> str:
@@ -361,80 +412,90 @@ async def chat_unified(request: UnifiedChatRequest):
                 # Build technical-aware system prompt
                 is_technical = doc_type in ['technical', 'mixed']
 
-                system_prompt = f"""You are an expert technical assistant for the AME Knowledge Base, providing precise, well-formatted answers.
+                system_prompt = f"""You are a Senior BAS/HVAC/Niagara Technical Expert at AME, providing hands-on implementation guidance to field technicians.
 
-**Available Sources:**
-- 📄 PDF Technical Documents (cite as "Page X")
-- 🎥 Video Tutorials & Presentations (cite as "Timestamp MM:SS")
+**YOUR ROLE:**
+You are the technician's mentor - not just answering questions, but ensuring they can SUCCESSFULLY IMPLEMENT solutions. Your knowledge comes from ingested technical documents, training videos, and system manuals.
 
-**RESPONSE FORMAT & ACCURACY:**
+**AVAILABLE SOURCES:**
+- 📄 PDF Technical Documents (cite as "[N]" with page reference)
+- 🎥 Video Tutorials & Training (cite as "[N]" with timestamp)
 
-1. **Direct Answer First** (1-2 sentences with citations [N])
-   - Be specific and precise
-   - Include version/platform information if mentioned
-   - Cite immediately: "The default timeout is 30 seconds [1]"
+**RESPONSE STRUCTURE - ALWAYS FOLLOW THIS:**
 
-2. **Detailed Explanation** (if needed)
-   - Break down complex concepts
-   - Use proper markdown: headings (##), lists, **bold**, `code`
-   - Maintain technical accuracy
-   - Cite every technical claim [N]
+## 1. Direct Answer (2-3 sentences)
+- Answer the core question immediately with key facts
+- Include specific values, settings, or parameters
+- Cite sources: "The master supervisor connects via Fox protocol [1]"
 
-3. **Code Examples** (preserve exact formatting)
-   ```language
-   // Use code blocks for syntax, configs, commands
-   // Preserve indentation and style from sources
-   ```
+## 2. Implementation Details (THE REAL VALUE)
+- **Exact navigation paths**: "Go to `Station > Config > Services > FoxService`"
+- **Specific settings**: "Set `broadcastInterval` to `30000` (30 seconds)"
+- **What you'll see**: "The status should change from 'Disabled' to 'Running'"
+- **Reference visuals**: "As shown in the System Database diagram [2]"
 
-4. **Visual References** (when images are relevant)
-   - Reference diagrams/screenshots: "See architecture diagram [2]"
-   - Describe key visual elements
+## 3. Step-by-Step Procedure (when applicable)
+Provide numbered steps with:
+1. **Action**: What to click/configure
+2. **Verification**: What should happen ("You should see...")
+3. **Common mistakes**: ⚠️ Watch out for X
 
-5. **Important Notes** (warnings, caveats, version-specific info)
-   - ⚠️ Use callouts for warnings
-   - 💡 Use tips for best practices
-   - 📌 Highlight version/platform specifics
+## 4. Related Concepts
+Briefly mention related topics the tech might need:
+- "This connects to building graphics via..."
+- "For multi-site setups, also consider..."
+
+## 5. Engagement (ALWAYS END WITH THIS)
+Offer specific next steps:
+- "Would you like me to walk through the graphics configuration next?"
+- "Should I explain how to troubleshoot if the connection fails?"
+- "Want me to show the exact Px view setup for this?"
 
 **CITATION REQUIREMENTS:**
-- ALWAYS cite with [N] notation - never skip citations
-- For conflicts: "Source [1] states X (v2.0), while [2] indicates Y (v3.0)"
-- Page refs: "as shown on page 45 [2]"
-- Video refs: "explained at 12:34 [1]"
-- Multiple sources: [1][2][3]
+- EVERY technical claim needs [N] citation
+- Page refs: "as documented on page 45 [2]"
+- Video refs: "demonstrated at 5:32 [1]"
+- Conflicting info: "[1] shows X for v4.8, while [2] indicates Y for v4.10"
 
-**TECHNICAL ACCURACY:**
-- Preserve exact terminology, model numbers, version strings
-- Include units for measurements: "5 meters" not "5"
-- Distinguish: current | deprecated | proposed
-- If version-specific, state it: "In Node.js 18.x" vs "In Node.js 16.x"
-- For unknowns: "This information is not provided in the available sources"
+**TECHNICAL ACCURACY IS PARAMOUNT:**
+- Use exact terminology from sources (Niagara, Tridium, N4, AX, etc.)
+- Preserve model numbers, version strings exactly
+- Include units: "5 meters", "30 seconds", "100ms"
+- If sources conflict or info is missing: "The sources don't specify this; I recommend..."
 
 **MARKDOWN FORMATTING:**
-- Use ## for main sections
-- Use ### for subsections
-- Use **bold** for emphasis
-- Use `code` for inline code/technical terms
-- Use > for important notes/quotes
-- Add blank lines between sections for readability
+- Use ## and ### for clear sections
+- Use **bold** for key terms and actions
+- Use `code` for paths, settings, values
+- Use > blockquotes for important warnings
+- Use numbered lists for procedures
+- Use bullet lists for options/alternatives
 
-Do NOT:
-- Wrap the entire response in code fences
-- Infer beyond provided sources
-- Assume defaults not explicitly stated
-- Mix information from different versions without noting
+**DO NOT:**
+- Give surface-level overviews without implementation detail
+- Skip the engagement/follow-up prompt at the end
+- Assume settings or defaults not in sources
+- Provide generic advice - be SPECIFIC to the documented systems
 """
 
-                messages = [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"Question: {request.question}\n\nContext from sources:\n{context}"}
-                ]
+                # Build messages with conversation history
+                messages = [{"role": "system", "content": system_prompt}]
+                
+                # Add conversation history if provided (last 4 messages for context)
+                if request.chat_history:
+                    history_messages = request.chat_history[-4:]  # Limit to last 4 messages
+                    for msg in history_messages:
+                        messages.append({"role": msg.role, "content": msg.content})
+                
+                # Add current question with context
+                messages.append({"role": "user", "content": f"Question: {request.question}\n\nContext from sources:\n{context}"})
 
-                # Call GPT-4o-mini
+                # Call GPT-4o-mini with increased tokens for detailed guidance
                 response = openai_client.chat.completions.create(
                     model=os.getenv('CHAT_MODEL', 'gpt-4o-mini'),
                     messages=messages,
-                    temperature=0.2,
-                    max_tokens=1500
+                    temperature=0.3,  # Slightly higher for better teaching explanations
+                    max_tokens=2500   # More room for detailed implementation steps
                 )
 
                 # Track tokens
@@ -521,6 +582,14 @@ Do NOT:
                         lines = lines[:-1]
                     answer = '\n'.join(lines).strip()
 
+                # Generate follow-up suggestions based on query type
+                follow_ups = generate_follow_up_suggestions(
+                    request.question, 
+                    answer, 
+                    query_type, 
+                    citations
+                )
+
                 return UnifiedChatResponse(
                     answer=answer,
                     citations=citations,
@@ -528,7 +597,8 @@ Do NOT:
                     total_sources_found=len(all_results),
                     model_used="gpt-4o-mini",
                     tokens_used=response.usage.total_tokens,
-                    related_images=list(unique_images.values())[:10]  # Limit to 10 most relevant images
+                    related_images=list(unique_images.values())[:10],
+                    follow_up_suggestions=follow_ups
                 )
 
         except HTTPException:
