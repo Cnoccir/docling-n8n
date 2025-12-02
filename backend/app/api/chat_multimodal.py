@@ -12,11 +12,68 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src'))
 from database.db_client import DatabaseClient
 from utils.embeddings import EmbeddingGenerator
 from app.utils.cost_tracker import CostTracker
+from app.utils.query_classifier import classify_query
+from app.utils.query_rewriter import rewrite_query
+from app.utils.prompt_builder import detect_question_mode, build_system_prompt, build_user_message
+from app.utils.conversation_manager import (
+    extract_conversation_context,
+    enhance_query_with_context,
+    should_expand_context_window,
+    format_chat_history_for_llm
+)
+
+# NEW: Import improvements
+from app.utils.answer_verifier import quick_verify
+from app.utils.adaptive_retrieval import adaptive_retrieval_params, needs_multi_hop_reasoning as check_multi_hop
+from app.utils.query_cache import QueryCache
+from app.utils.conversation_manager_enhanced import format_chat_history_with_summary
+from app.utils.multi_hop_retriever import multi_hop_retrieve
+from app.utils.retrieval_metrics import Retrieval Metrics
 
 router = APIRouter()
 
 # OpenAI client
 openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+# NEW: Initialize cache and metrics
+query_cache = QueryCache(db_client=None, ttl_hours=24)
+retrieval_metrics = RetrievalMetrics(db_client=None)
+
+
+
+# NEW: Phase 3 - Map query categories to topic filters
+CATEGORY_TO_TOPIC_MAP = {
+    'architecture': ['system_database', 'multi_tier_architecture'],
+    'graphics': ['graphics'],
+    'provisioning': ['provisioning'],
+    'troubleshooting': ['troubleshooting'],
+    'configuration': ['configuration'],
+    'hardware': ['hardware'],
+    'hvac': ['hvac_systems'],
+    'energy': ['energy_management'],
+    'integration': ['integration']
+}
+
+def map_categories_to_topics(categories: List[str]) -> List[str]:
+    """Map query categories to relevant topic list for boosting.
+    
+    Args:
+        categories: List of query categories (e.g., ['architecture', 'graphics'])
+        
+    Returns:
+        List of relevant topics (for graduated boosting, not filtering)
+    
+    Strategy: NO HARD EXCLUSIONS. Use soft boosting instead.
+    - Primary match (exact category→topic): 1.5x boost
+    - Secondary match (related topics): 1.2x boost  
+    - No match: 1.0x (still searchable)
+    """
+    relevant_topics = []
+    for category in categories:
+        topics = CATEGORY_TO_TOPIC_MAP.get(category, [])
+        relevant_topics.extend(topics)
+    
+    # Remove duplicates
+    return list(set(relevant_topics))
 
 
 class ChatMessage(BaseModel):
@@ -34,6 +91,8 @@ class ChatRequest(BaseModel):
     use_images: bool = True
     use_tables: bool = True
     context_window: int = 2  # ±2 surrounding chunks
+    model: str = "gpt-4o-mini"  # User can choose: gpt-4o-mini (cost-effective) or gpt-4o (deeper reasoning)
+    temperature: Optional[float] = None  # Auto-set based on mode if None
 
 
 class ImageReference(BaseModel):
@@ -194,15 +253,19 @@ def build_multimodal_messages(
     expanded_contexts: List[Dict],
     question: str,
     doc_title: str,
+    question_mode: str,
+    chat_history: List[ChatMessage] = None,
     include_images: bool = True
 ) -> tuple[List[Dict], List[str], List[Dict]]:
     """
-    Build GPT-4o messages with text, images, and tables.
+    Build GPT-4o messages with adaptive prompts based on question mode.
 
     Args:
         expanded_contexts: List of enriched contexts from expand_chunk_context
         question: User's question
         doc_title: Document title
+        question_mode: Mode detected (conceptual, troubleshooting, design, procedural, comparison)
+        chat_history: Optional chat history for conversation context
         include_images: Whether to include images in vision mode
 
     Returns:
@@ -210,102 +273,18 @@ def build_multimodal_messages(
     """
     messages = []
 
-    # Detect procedural question
-    is_procedural = any(word in question.lower() for word in [
-        'how to', 'how do', 'steps', 'procedure', 'process', 'workflow', 'show me'
-    ])
+    # Use adaptive system prompt based on question mode
+    has_chat_history = chat_history is not None and len(chat_history) > 0
+    system_content = build_system_prompt(
+        mode=question_mode,
+        doc_title=doc_title,
+        has_chat_history=has_chat_history
+    )
+    
+    # Add critical note about not wrapping response in code fences
+    system_content = f"""IMPORTANT: Return ONLY the formatted markdown content. Do NOT wrap your entire response in code fences (```). Your response should start directly with content (like ## Heading or text), not with ```.
 
-    # Build conditional response structure
-    if is_procedural:
-        question_type = "For procedural questions (how-to, steps, process):"
-        response_structure = """1. Start with a brief overview (1-2 sentences)
-2. Break down into clear numbered steps:
-   **Step 1: [Action Name]**
-   - Clear description of what to do
-   - Reference UI elements: "Click the **Add** button" or "In the **Username** field..."
-   - Include relevant screenshots: "As shown in Figure X below..."
-   - Cite source: [N]
-
-3. For each step:
-   - **What to do**: Clear action
-   - **Where**: Exact location (screen, pane, menu)
-   - **Visual reference**: Mention if screenshot shows this step
-   - **Expected result**: What happens next
-
-4. End with a summary or verification step"""
-    else:
-        question_type = "For informational questions:"
-        response_structure = """1. Start with a direct answer (1-2 sentences)
-2. Organize details into sections with headers:
-   **## Topic Name**
-   - Key points in bullets
-   - Reference screenshots when available
-   - Include tables for structured data
-
-3. Use examples and visual references
-4. Cite all sources [N]"""
-
-    # System prompt
-    system_content = f"""You are an expert technical documentation assistant for "{doc_title}".
-
-IMPORTANT: Return ONLY the formatted markdown content. Do NOT wrap your entire response in code fences (```). Your response should start directly with content (like ## Heading or text), not with ```.
-
-FORMATTING REQUIREMENTS (CRITICAL - Follow EXACTLY):
-- Use proper markdown syntax with clear visual hierarchy
-- Use ## for main sections, ### for subsections
-- Use **bold** for important terms, button names, field names
-- Use numbered lists for steps: "1. Step one\n2. Step two\n3. Step three"
-- Use bullet points (- or *) for options or features
-- Use `backticks` for technical terms, filenames, or values
-- CRITICAL: Add BLANK LINES between ALL paragraphs and sections
-- CRITICAL: Add BLANK LINES before and after headings
-- CRITICAL: Add BLANK LINES before and after lists
-- CRITICAL: Add BLANK LINES before and after code blocks
-- CRITICAL: Add BLANK LINES before and after tables
-- CRITICAL: Add BLANK LINES before and after images
-
-EXAMPLE FORMATTING:
-```
-## Section Title
-
-This is a paragraph with proper spacing.
-
-Another paragraph after a blank line.
-
-### Subsection
-
-- Bullet point one
-- Bullet point two
-- Bullet point three
-
-Here's an image:
-
-![Image description](https://s3.url/image.jpg)
-
-The image shows...
-```
-
-RESPONSE STRUCTURE:
-{question_type}
-{response_structure}
-
-CITATION RULES:
-- Place citations immediately after the statement: "The user must have admin privileges [1]"
-- Reference page numbers when describing location: "as shown on page 70 [2]"
-- When showing screenshots: "See Figure 18 below [3]" (the screenshot will appear in the citation)
-- Group related citations: "These steps are required [1][2]"
-
-VISUAL CONTENT:
-- When images are provided in context, YOU MUST embed them in your response using markdown image syntax
-- Format: ![Image caption](EXACT_S3_URL_FROM_CONTEXT)
-- The S3 URLs are provided in the context under "Images on Page X" - copy them EXACTLY
-- Example: If context shows "s3_url: https://bucket.s3.amazonaws.com/image.jpg", use: ![Caption](https://bucket.s3.amazonaws.com/image.jpg)
-- Place images right after describing them: "The dialog contains three fields:\n\n![User Dialog Screenshot](https://...)\n\nAs shown above..."
-- For tables: Include the FULL markdown table from context in your response
-- Always embed visual content directly - don't just reference it
-
-TONE: Professional, clear, concise. Like a technical manual or official documentation.
-"""
+{system_content}"""
 
     messages.append({"role": "system", "content": system_content})
 
@@ -371,11 +350,23 @@ TONE: Professional, clear, concise. Like a technical manual or official document
     # Combine text context
     text_context = "".join(context_parts)
 
+    # Convert chat_history from ChatMessage objects to dicts if needed
+    history_dicts = []
+    if chat_history:
+        history_dicts = [{"role": msg.role, "content": msg.content} for msg in chat_history]
+    
+    # Build user message with conversation context
+    user_text = build_user_message(
+        question=question,
+        context=text_context,
+        chat_history=history_dicts if history_dicts else None
+    )
+
     # Build multimodal content for user message
     user_content = [
         {
             "type": "text",
-            "text": f"Question: {question}\n\nDocument Context:\n{text_context}"
+            "text": user_text
         }
     ]
 
@@ -402,15 +393,17 @@ TONE: Professional, clear, concise. Like a technical manual or official document
 @router.post("/", response_model=ChatResponse)
 async def chat_with_document_multimodal(request: ChatRequest):
     """
-    Golden Chunk + Multimodal RAG with hierarchical context expansion.
+    Golden Chunk + Multimodal RAG with query intelligence and hierarchical context expansion.
 
     This endpoint implements the full multimodal RAG strategy:
-    1. Search for top-k "golden chunks" using hybrid search
-    2. Expand each chunk with surrounding context (siblings)
-    3. Enrich with section hierarchy paths
-    4. Add images from the same pages
-    5. Add tables from the same pages
-    6. Send everything to GPT-4o with vision
+    1. Classify query intent (architecture, graphics, provisioning, etc.)
+    2. Rewrite query with domain-specific keywords
+    3. Search for top-k "golden chunks" using hybrid search
+    4. Expand each chunk with surrounding context (siblings)
+    5. Enrich with section hierarchy paths
+    6. Add images from the same pages
+    7. Add tables from the same pages
+    8. Send everything to GPT-4o with vision
 
     Returns enriched answers with multimodal citations.
     """
@@ -425,24 +418,66 @@ async def chat_with_document_multimodal(request: ChatRequest):
     ) as tracker:
         try:
             with db:
-                # Step 1: Get document info
+                # Step 0: Process chat history for conversation context
+                conversation_context = extract_conversation_context(
+                    [{"role": msg.role, "content": msg.content} for msg in request.chat_history]
+                )
+                print(f"💬 Conversation context: is_followup={conversation_context['is_followup']}, entities={len(conversation_context['entities'])}")
+                
+                # Step 1: Classify query intent
+                query_categories = classify_query(request.question, use_llm=True)
+                print(f"📊 Query categories: {query_categories}")
+                
+                # Step 1b: Detect question mode for adaptive prompting
+                question_mode = detect_question_mode(request.question, query_categories)
+                print(f"🎭 Question mode: {question_mode}")
+                
+                # Step 2: Enhance query with conversation context if follow-up
+                enhanced_question = enhance_query_with_context(request.question, conversation_context)
+                
+                # Step 3: Rewrite query for better keyword matching
+                rewritten_query = rewrite_query(enhanced_question, query_categories)
+                print(f"📝 Original:  {request.question}")
+                print(f"📝 Enhanced:  {enhanced_question}")
+                print(f"📝 Rewritten: {rewritten_query}")
+                
+                # Step 4: Map categories to topics for soft boosting (no exclusions)
+                relevant_topics = map_categories_to_topics(query_categories)
+                print(f"🔖 Relevant topics (will be boosted): {relevant_topics}")
+                
+                # Step 5: Adjust retrieval parameters based on conversation context
+                top_k = request.top_k
+                context_window = request.context_window
+                if should_expand_context_window(conversation_context):
+                    top_k = min(top_k + 2, 10)  # Expand slightly for follow-ups
+                    context_window = min(context_window + 1, 4)  # Wider context window
+                    print(f"🔍 Expanded context: top_k={top_k}, window={context_window}")
+                
+                # Step 6: Get document info
                 doc = db.get_document_details(request.doc_id)
                 if not doc:
                     raise HTTPException(status_code=404, detail="Document not found")
 
-                # Step 2: Generate embedding for question
+                # Step 5: Generate embedding for question (use original, not rewritten)
                 question_embedding = embedding_gen.generate_embeddings([request.question])[0]
 
-                # Step 3: Search for GOLDEN CHUNKS using hybrid search
+                # Step 6: Search for GOLDEN CHUNKS using topic-aware hybrid search (Phase 3)
                 # We use fewer chunks (5 instead of 15) because each will be enriched
-                search_resultssearch_results = db.search_chunks_hybrid(
+                # Use rewritten query for BM25 keyword search + soft topic boosting (NO HARD FILTERS)
+                search_results = db.search_chunks_hybrid_with_topics(
                     query_embedding=question_embedding,
-                    query_text=request.question,
+                    query_text=rewritten_query,  # Use rewritten for BM25
                     doc_id=request.doc_id,
+                    include_topics=relevant_topics,  # Soft boost, not filter
+                    exclude_topics=None,  # REMOVED: No hard exclusions
                     semantic_weight=0.5,
                     keyword_weight=0.5,
                     top_k=request.top_k
                 )
+                
+                print(f"\n🔍 Search results with topics:")
+                for i, result in enumerate(search_results[:3], 1):
+                    print(f"  {i}. topic={result.get('topic')}, topics={result.get('topics')}, boost={result.get('topic_boost', 1.0)}, score={result.get('final_score', 0):.3f}")
 
                 if not search_results:
                     raise HTTPException(
@@ -450,7 +485,7 @@ async def chat_with_document_multimodal(request: ChatRequest):
                         detail="No relevant content found in document"
                     )
 
-                # Step 4: Expand context for each golden chunk
+                # Step 7: Expand context for each golden chunk (use adaptive context_window)
                 expanded_contexts = []
                 for result in search_results:
                     expanded = expand_chunk_context(
@@ -459,27 +494,51 @@ async def chat_with_document_multimodal(request: ChatRequest):
                         doc_id=request.doc_id,
                         include_images=request.use_images,
                         include_tables=request.use_tables,
-                        context_window=request.context_window
+                        context_window=context_window  # Use adaptive window
                     )
                     expanded_contexts.append(expanded)
 
-                # Step 5: Build multimodal messages
+                # Step 8: Build adaptive multimodal messages
                 messages, images_used, tables_used = build_multimodal_messages(
                     expanded_contexts=expanded_contexts,
                     question=request.question,
                     doc_title=doc['title'],
+                    question_mode=question_mode,
+                    chat_history=request.chat_history,
                     include_images=request.use_images
                 )
 
-                # Step 6: Call GPT-4o-mini (cheaper with vision + tool calling)
-                # GPT-4o-mini now supports vision at much lower cost than GPT-4o
-                model = "gpt-4o-mini"  # Supports vision, tool calling, and much cheaper
+                # Step 9: Configure model based on mode and user selection
+                # User can choose model, but we optimize temperature/max_tokens based on mode
+                model = request.model  # gpt-4o-mini or gpt-4o
+                
+                # Adaptive temperature based on question mode
+                if request.temperature is not None:
+                    temperature = request.temperature  # User override
+                else:
+                    # Auto-set based on mode
+                    if question_mode in ['conceptual', 'design', 'comparison']:
+                        temperature = 0.4  # Allow reasoning and creativity
+                    elif question_mode == 'troubleshooting':
+                        temperature = 0.3  # Balanced
+                    else:  # procedural
+                        temperature = 0.2  # Precise
+                
+                # Adaptive max_tokens based on mode
+                if question_mode in ['design', 'troubleshooting', 'comparison']:
+                    max_tokens = 2500  # Deeper analysis
+                elif question_mode == 'conceptual':
+                    max_tokens = 2000  # Teaching depth
+                else:
+                    max_tokens = 1500  # Procedural precision
+                
+                print(f"🤖 Model config: {model}, temp={temperature}, max_tokens={max_tokens}")
 
                 response = openai_client.chat.completions.create(
                     model=model,
                     messages=messages,
-                    temperature=0.2,
-                    max_tokens=1500
+                    temperature=temperature,
+                    max_tokens=max_tokens
                 )
 
                 # Track token usage and cost
@@ -489,7 +548,7 @@ async def chat_with_document_multimodal(request: ChatRequest):
                     model=model
                 )
 
-                # Step 7: Build enriched citations
+                # Step 9: Build enriched citations
                 citations = []
                 for ctx in expanded_contexts:
                     chunk = ctx['chunk']
@@ -545,7 +604,7 @@ async def chat_with_document_multimodal(request: ChatRequest):
                         tables=table_refs
                     ))
 
-                # Step 8: Clean up the response
+                # Step 10: Clean up the response
                 raw_answer = response.choices[0].message.content
 
                 # Remove code fence wrapper if AI wrapped entire response
